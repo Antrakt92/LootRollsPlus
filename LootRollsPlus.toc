@@ -1,0 +1,19 @@
+## Interface: 16001
+## Title: Loot Rolls Plus
+## Notes: See group loot choices, winning rolls and dungeon history in WoW Forever.
+## Author: Antrakt92, based on Loot Rolls Inspector by Carlos
+## Version: 1.0.0
+## X-Curse-Project-ID: 1806323
+## SavedVariables: LootRollsPlusDB
+## SavedVariablesPerCharacter: LootRollsPlusCharDB
+## OptionalDeps: LootRollsInspector, DungeonQuestAtlas, Auctionator, Mastercraft
+
+History.lua
+Gear.lua
+Capture.lua
+Inspect.lua
+RollDisplay.lua
+LiveRolls.lua
+LiveSource.lua
+LiveView.lua
+LootRollsPlus.lua
