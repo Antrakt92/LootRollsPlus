@@ -123,6 +123,8 @@ local function normalizeInspections(inspections)
             inspections[name] = nil
         else
             snapshot.class, snapshot.at = plainText(snapshot.class), positiveInteger(snapshot.at)
+            snapshot.atDrop = clean(snapshot.atDrop, "boolean") == true or nil
+            snapshot.guid = snapshot.atDrop and plainText(snapshot.guid) or nil
             snapshot.links, snapshot.empty = clean(snapshot.links, "table") or {}, clean(snapshot.empty, "table") or {}
             for slot, link in pairs(snapshot.links) do
                 if not positiveInteger(slot) or slot > 2 or not itemLink(link) then snapshot.links[slot] = nil end

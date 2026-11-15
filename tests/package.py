@@ -30,7 +30,10 @@ def main():
         re.fullmatch(r"[A-Za-z][A-Za-z0-9]*\.lua", name) for name in modules
     ):
         parser.error("Expected unique Lua modules in the TOC.")
-    names = [toc.name, *modules, "LICENSE", "README.md", "CHANGELOG.md"]
+    names = [
+        toc.name, *modules, "LICENSE", "README.md", "CHANGELOG.md",
+        "media/addon-icon.png",
+    ]
     expected = {f"{root.name}/{name}": (root / name).read_bytes() for name in names}
     archive.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix=".loot-rolls-plus-", dir=archive.parent) as staging:

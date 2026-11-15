@@ -784,7 +784,7 @@ function ns.NewCapture(callbacks)
         end
         local bindingsChanged = not sameBindings(participantGUIDs[entry], bindings)
         participantGUIDs[entry] = bindings
-        if changed or bindingsChanged then callbacks.onDrop(entry, isNew) end
+        if changed or bindingsChanged then callbacks.onDrop(entry, isNew, baseline) end
     end
 
     local function scanEncounter(encounterID, baseline)

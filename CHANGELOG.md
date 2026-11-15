@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.0 — 15-Nov-2026 — Saved equipment comparisons
+
+- Save matching equipment when a player who chooses Need or wins a recent drop can be inspected. Open the roll later in History to see the saved item.
+- Open History and Options inside the roll window. Resize the window once and use the same height across all views.
+- Restore a hidden window from Settings → AddOns → Loot Rolls Plus or with `/lrplus show`.
+- Place warning dots next to the roll result and show the Loot Rolls Plus icon in game.
+
 ## 1.0.0 — 15-Nov-2026 — First Loot Rolls Plus release
 
 - See Need, Greed and Pass as the game reports them. Party panels show individual choices, and raid panels open a scrollable breakdown for each drop.

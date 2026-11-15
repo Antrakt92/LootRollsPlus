@@ -121,7 +121,15 @@ function widget:SetThumbTexture(path)
 end
 function widget:GetThumbTexture() return self.thumb end
 function widget:CreateMaskTexture() return newWidget("MaskTexture", self) end
-function widget:CreateFontString() return newWidget("FontString", self) end
+function widget:CreateFontString()
+    local text = newWidget("FontString", self)
+    text.font, text.fontSize, text.fontFlags = "Fonts\\FRIZQT__.TTF", 12, ""
+    return text
+end
+function widget:GetFont() return self.font, self.fontSize, self.fontFlags end
+function widget:SetFont(path, size, flags)
+    self.font, self.fontSize, self.fontFlags = path, size, flags
+end
 function widget:GetHighlightTexture() return newWidget("Texture", self) end
 function CreateFrame(kind, name, parent, template)
     local frame = newWidget(kind, parent)
@@ -275,8 +283,21 @@ LootRollsInspectorCharDB = {days = {[dayKey] = {{
 }}}}
 
 local latestNS
+local settingsCategory
+Settings = {
+    RegisterCanvasLayoutCategory = function(panel, name) return {panel = panel, name = name} end,
+    RegisterAddOnCategory = function(category)
+        assert(not settingsCategory, "Settings category registered twice")
+        settingsCategory = category
+    end,
+}
+SettingsPanel = newWidget("Frame", UIParent)
+SettingsPanel:Hide()
+function HideUIPanel(panel) panel:Hide() end
+
 local function loadAddon(isReload)
     frames, timers = {}, {}
+    settingsCategory = nil
     local namespace, count = {}, 0
     latestNS = namespace
     for line in io.lines(root .. "/LootRollsPlus.toc") do
@@ -300,7 +321,94 @@ loadAddon(false)
 local legacy = nextVisibleRow(LootRollsPlusFrame)
 contains(legacy.right.value, "Greed 99")
 contains(legacy.player.value, "LegacyPerson")
+do
+    local main, options = LootRollsPlusFrame, LootRollsPlusOptions
+    local grip = LootRollsPlusResizeGrip
+    local originalHeight = main:GetHeight()
+    local tab
+    for _, child in ipairs(main.children) do
+        if child.text and child.text:GetText() == "Options" then tab = child end
+    end
+    assert(options:GetParent() == main and tab and not options:IsShown())
+    tab:GetScript("OnClick")(tab)
+    assert(options:IsVisible() and options.events.GLOBAL_MOUSE_DOWN)
+    assert(not legacy:IsVisible() and grip:IsVisible() and main:GetHeight() == originalHeight)
+    mouseDown("LeftButton", LootRollsPlusShowLiveRolls)
+    fire("PLAYER_ENTERING_WORLD", false, false)
+    assert(options:IsVisible() and not legacy:IsVisible(), "a refresh exposed the list under Options")
+    mouseDown("LeftButton", tab)
+    assert(options:IsShown(), "Options must stay open until its button handles the click")
+    tab:GetScript("OnClick")(tab)
+    assert(not options:IsShown() and legacy:IsVisible())
+    tab:GetScript("OnClick")(tab)
+    mouseDown("RightButton", UIParent)
+    assert(not options:IsShown() and not options.events.GLOBAL_MOUSE_DOWN)
+    assert(legacy:IsVisible() and grip:IsVisible() and main:GetHeight() == originalHeight)
+    tab:GetScript("OnClick")(tab)
+    SlashCmdList.LOOTROLLSPLUS("")
+    assert(not options:IsShown() and not main:IsShown())
+    SlashCmdList.LOOTROLLSPLUS("config")
+    assert(options:IsVisible(), "options must still be accessible when the list is hidden")
+    mouseDown("LeftButton", UIParent)
+    assert(not options:IsShown() and not main:IsShown(), "closing options must respect the saved visibility")
+    SlashCmdList.LOOTROLLSPLUS("")
+    assert(main:IsVisible() and legacy:IsVisible())
+
+    local groupState, originalPrint = IsInGroup, print
+    IsInGroup = function() return false end
+    local recoveryHint
+    print = function(message) recoveryHint = message end
+    tab:GetScript("OnClick")(tab)
+    local solo = LootRollsPlusHideSolo
+    solo:SetChecked(true)
+    solo:GetScript("OnClick")(solo)
+    assert(options:IsVisible() and LootRollsPlusDB.hideSolo)
+    contains(recoveryHint, "/lrplus show")
+    fire("GROUP_ROSTER_UPDATE")
+    assert(options:IsVisible(), "a roster event must not close Options while editing Hide Solo")
+    mouseDown("LeftButton", UIParent)
+    assert(not main:IsVisible() and not options:IsShown())
+    assert(settingsCategory and settingsCategory.name == "Loot Rolls Plus")
+    local page = settingsCategory.panel
+    assert(page:GetParent() ~= main)
+    local toc = assert(io.open(root .. "/LootRollsPlus.toc"))
+    local iconPath = assert(toc:read("*a"):match("## IconTexture: ([^\r\n]+)"))
+    toc:close()
+    local settingsIcon
+    for _, child in ipairs(page.children) do
+        if child.kind == "Texture" then settingsIcon = child end
+    end
+    assert(settingsIcon and settingsIcon.texture == iconPath)
+    SettingsPanel:Show()
+    page:Hide()
+    page:Show()
+    local settingsSolo, restore
+    for _, child in ipairs(page.children) do
+        if child.kind == "CheckButton" then settingsSolo = child end
+        if child.kind == "Button" then restore = child end
+    end
+    assert(settingsSolo:GetChecked(), "Blizzard Settings must reflect the hidden state")
+    settingsSolo:SetChecked(false)
+    settingsSolo:GetScript("OnClick")(settingsSolo)
+    assert(main:IsVisible() and not LootRollsPlusDB.hideSolo)
+    settingsSolo:SetChecked(true)
+    settingsSolo:GetScript("OnClick")(settingsSolo)
+    assert(not main:IsVisible())
+    LootRollsPlusDB.hidden = true
+    restore:GetScript("OnClick")(restore)
+    assert(main:IsVisible() and not SettingsPanel:IsShown() and not settingsSolo:GetChecked())
+    assert(not LootRollsPlusDB.hidden and not LootRollsPlusDB.hideSolo)
+    LootRollsPlusDB.hidden, LootRollsPlusDB.hideSolo = true, true
+    SlashCmdList.LOOTROLLSPLUS("show")
+    assert(main:IsVisible() and not LootRollsPlusDB.hidden and not LootRollsPlusDB.hideSolo)
+    IsInGroup, print = groupState, originalPrint
+end
 assert(legacy.classUnknown:IsShown() and not legacy.classIcon:IsShown())
+SlashCmdList.LOOTROLLSPLUS("history")
+local importedHistoryRow = nextVisibleRow(LootRollsPlusHistoryScroll.scrollChild)
+assert(importedHistoryRow.entry == legacy.entry and importedHistoryRow.lastPoint[3] == 0,
+    "an imported roll should start at the top of History without a heading")
+SlashCmdList.LOOTROLLSPLUS("history")
 legacy.entry.winnerType, legacy.entry.rolls[1].type = "need", "need"
 fire("PLAYER_ENTERING_WORLD", false, false)
 assert(not legacy.alert:IsShown(), "unverified imported rolls must not show equipment warnings")
@@ -393,7 +501,12 @@ for _, child in ipairs(content.children) do
     if child.kind == "FontString" and child:IsShown() then headings[#headings + 1] = child.value end
 end
 contains(table.concat(headings, "\n"), "Scarlet Monastery")
-contains(table.concat(headings, "\n"), "Imported history")
+assert(not table.concat(headings, "\n"):find("Imported history", 1, true))
+assert(LootRollsPlusHistory:GetParent() == LootRollsPlusFrame and not resultRow:IsVisible())
+mouseDown("LeftButton", LootRollsPlusHistoryScroll)
+assert(LootRollsPlusHistory:IsVisible())
+mouseDown("LeftButton", UIParent)
+assert(not LootRollsPlusHistory:IsShown() and resultRow:IsVisible())
 
 StaticPopupDialogs.LOOTROLLSPLUS_CLEAR.OnAccept()
 fire("LOOT_HISTORY_UPDATE_DROP", 20, 1)
@@ -494,12 +607,12 @@ assert(frame.sizingDirection == "BOTTOM")
 frame:SetHeight(frame.resizeBounds[4])
 frame:GetScript("OnSizeChanged")(frame, width, frame:GetHeight())
 grip:GetScript("OnMouseUp")(grip, "LeftButton")
-assert(LootRollsPlusDB.visibleRows == 25 and frame:GetHeight() == frame.resizeBounds[4])
+assert(LootRollsPlusDB.windowHeight == frame.resizeBounds[4] and frame:GetHeight() == frame.resizeBounds[4])
 loadAddon(true)
 frame, grip = LootRollsPlusFrame, LootRollsPlusResizeGrip
 assert(frame:GetHeight() == frame.resizeBounds[4] and frame:GetWidth() == width)
 grip:GetScript("OnMouseUp")(grip, "RightButton")
-assert(not LootRollsPlusDB.visibleRows and frame:GetHeight() < frame.resizeBounds[4])
+assert(not LootRollsPlusDB.windowHeight and frame:GetHeight() < frame.resizeBounds[4])
 
 local equipped = "|cff00ff00|Hitem:4321::::::::|h[Equipped robe]|h|r"
 function UnitGUID(unit) if unit == "player" then return "Player-Test" end end
@@ -750,6 +863,11 @@ assert(tooltip[#tooltip] == "Reward from Find Agmond", "ordinary tooltips should
 mouseDown("LeftButton", LootRollsPlusHistory)
 assert(not LootRollsPlusDetails:IsShown() and LootRollsPlusHistory:IsShown(),
     "clicking outside a History comparison should close only the comparison")
+jewelRow:GetScript("OnClick")(jewelRow)
+mouseDown("LeftButton", leftCard)
+assert(LootRollsPlusDetails:IsShown() and LootRollsPlusHistory:IsShown())
+mouseDown("LeftButton", UIParent)
+assert(not LootRollsPlusHistory:IsShown() and not LootRollsPlusDetails:IsShown())
 
 wallTime, historyTime = wallTime + 1, historyTime + 1
 local nativeSelf = {playerName = "Self", playerClass = "PALADIN", playerGUID = "Player-Test", state = 0, roll = 97}
@@ -852,17 +970,28 @@ local function checkResultColumns(parent)
     assert(rows[amber].alert:IsShown() and rows[amber].alert.vertexColor[2] > 0.5)
     assert(rows[red].alert:IsShown() and rows[red].alert.vertexColor[2] < 0.3)
     assert(rows[red].alert:GetWidth() == 8 and rows[red].alert:GetHeight() == 8)
+    for _, entry in ipairs({amber, red}) do
+        local row = rows[entry]
+        local point = row.alert.lastPoint
+        local resultWidth = row.right:GetUnboundedStringWidthForText(row.right.value)
+        assert(point[2] == row.right and point[3] == "RIGHT" and point[4] == -resultWidth - 5,
+            "warning dots should sit next to the visible roll text")
+        assert(row.left.lastPoint[2] == row.alert and row.left.lastPoint[4] == -3,
+            "item text must stop before the warning dot")
+    end
     assert(not rows[greed].alert:IsShown() and not rows[unknown].alert:IsShown())
 end
-checkResultColumns(LootRollsPlusFrame)
 checkResultColumns(historyResults.scrollChild)
+SlashCmdList.LOOTROLLSPLUS("history")
+checkResultColumns(LootRollsPlusFrame)
 DungeonQuestAtlasCharDB = nil
 loadAddon(true)
 local _, _, restoredResults = openHistory()
-checkResultColumns(LootRollsPlusFrame)
 checkResultColumns(restoredResults.scrollChild)
+SlashCmdList.LOOTROLLSPLUS("history")
+checkResultColumns(LootRollsPlusFrame)
 LootRollsPlusCharDB.days = {[shortDate] = shortEntries, [longDate] = longEntries}
-LootRollsPlusDB.historyHeight = nil
+LootRollsPlusDB.windowHeight = nil
 loadAddon(true)
 
 local function selectDate(scroll, dateKey)
@@ -875,16 +1004,22 @@ local function selectDate(scroll, dateKey)
     error("missing date selection: " .. dateKey)
 end
 
+local main = LootRollsPlusFrame
+main.mockRight, main.mockTop = 580, 500
+local mainListHeight = main:GetHeight()
 local history, dateScroll, itemScroll = openHistory()
 local shortHeight, shortWidth = history:GetHeight(), itemScroll:GetWidth()
 local historyRow = nextVisibleRow(itemScroll.scrollChild)
-assert(history:GetWidth() <= 465 and shortWidth <= LootRollsPlusFrame:GetWidth() + 28,
-    "history should use columns close to the width of the main roll list")
-assert(itemScroll.lastPoint[2] == 8 + dateScroll:GetWidth() + 8)
-history:Hide()
-history:SetWidth(700)
+assert(history:GetWidth() < 465 and main:GetWidth() == history:GetWidth())
+assert(main.lastPoint[1] == "TOPRIGHT" and main.lastPoint[2] == UIParent
+    and main.lastPoint[3] == "BOTTOMLEFT" and main.lastPoint[4] == 580 and main.lastPoint[5] == 500)
+assert(main:GetHeight() == shortHeight and shortHeight == mainListHeight)
+assert(dateScroll:GetWidth() < 108 and itemScroll.lastPoint[2] == 8 + dateScroll:GetWidth() + 4)
+SlashCmdList.LOOTROLLSPLUS("history")
+assert(main:GetWidth() == 305 and LootRollsPlusResizeGrip:IsVisible())
+assert(main:GetHeight() == mainListHeight and main.lastPoint[4] == 580 and main.lastPoint[5] == 500)
 openHistory()
-assert(history:GetWidth() <= 465 and itemScroll:GetWidth() == shortWidth,
+assert(main:GetWidth() == history:GetWidth() and itemScroll:GetWidth() == shortWidth,
     "opening history should restore its fixed compact width")
 for _, child in ipairs(history.children) do
     assert(child.value ~= "Clear", "the history header still contains a Clear button")
@@ -893,7 +1028,7 @@ assert(not dateScroll.ScrollBar:IsShown() and not itemScroll.ScrollBar:IsShown()
 assert(historyRow:GetWidth() == shortWidth)
 selectDate(dateScroll, longDate)
 local longHeight = history:GetHeight()
-assert(longHeight > shortHeight and longHeight < 420)
+assert(longHeight == shortHeight)
 assert(not dateScroll.ScrollBar:IsShown() and itemScroll.ScrollBar:IsShown())
 assert(itemScroll:GetWidth() < shortWidth and historyRow:GetWidth() == itemScroll:GetWidth())
 itemScroll:SetVerticalScroll(40)
@@ -911,33 +1046,36 @@ end
 loadAddon(true)
 history, dateScroll, itemScroll = openHistory()
 assert(dateScroll.ScrollBar:IsShown() and not itemScroll.ScrollBar:IsShown())
-assert(itemScroll.lastPoint[2] == 8 + dateScroll:GetWidth() + 23 + 8,
+assert(itemScroll.lastPoint[2] == 8 + dateScroll:GetWidth() + 23 + 4,
     "reserve the date scrollbar gutter only when it is visible")
 assert(history:GetHeight() == longHeight)
 
 local historyGrip = LootRollsPlusHistoryResizeGrip
 local historyWidth = history:GetWidth()
+main = LootRollsPlusFrame
 historyGrip:GetScript("OnMouseDown")(historyGrip, "LeftButton")
-assert(history.sizingDirection == "BOTTOM")
-assert(history.resizeBounds[1] == historyWidth and history.resizeBounds[3] == historyWidth)
-history:SetHeight(175)
-history:GetScript("OnSizeChanged")(history, historyWidth, 175)
+assert(main.sizingDirection == "BOTTOM")
+assert(main.resizeBounds[1] == historyWidth and main.resizeBounds[3] == historyWidth)
+main:SetHeight(175)
+main:GetScript("OnSizeChanged")(main, historyWidth, 175)
 historyGrip:GetScript("OnMouseUp")(historyGrip, "LeftButton")
-assert(LootRollsPlusDB.historyHeight == 175)
+assert(LootRollsPlusDB.windowHeight == 175)
 loadAddon(true)
 history, dateScroll, itemScroll = openHistory()
 assert(history:GetWidth() == historyWidth and history:GetHeight() == 175)
 selectDate(dateScroll, longDate)
 assert(history:GetHeight() == 175 and dateScroll.ScrollBar:IsShown() and itemScroll.ScrollBar:IsShown())
-assert(itemScroll:GetWidth() == shortWidth - 46 and itemScroll:GetWidth() >= 285,
+assert(itemScroll:GetWidth() == historyWidth - dateScroll:GetWidth() - 22 - 46 and itemScroll:GetWidth() >= 256,
     "keep room for item names and roll results with both scrollbars visible")
 historyGrip = LootRollsPlusHistoryResizeGrip
 historyGrip:GetScript("OnMouseUp")(historyGrip, "RightButton")
-assert(not LootRollsPlusDB.historyHeight and history:GetHeight() == longHeight)
+assert(not LootRollsPlusDB.windowHeight and history:GetHeight() == longHeight)
 
 SlashCmdList.LOOTROLLSPLUS("config")
 local clearHistory = assert(LootRollsPlusClearHistory)
 assert(clearHistory.parent == LootRollsPlusOptions and clearHistory:IsVisible())
+assert(not history:IsShown() and LootRollsPlusFrame:GetWidth() == 305)
+assert(LootRollsPlusFrame:GetHeight() == longHeight, "switching from History to Options changed the height")
 clearHistory:GetScript("OnClick")(clearHistory)
 assert(popup == "LOOTROLLSPLUS_CLEAR")
 assert(next(LootRollsPlusCharDB.days), "opening the confirmation cleared history")
@@ -947,8 +1085,10 @@ assert(next(LootRollsPlusCharDB.days), "cancelling confirmation cleared history"
 clearHistory:GetScript("OnClick")(clearHistory)
 clearDialog.OnAccept()
 assert(not next(LootRollsPlusCharDB.days))
+history, dateScroll, itemScroll = openHistory()
+assert(not LootRollsPlusOptions:IsShown() and not dateScroll:IsShown() and itemScroll.lastPoint[2] == 8)
 assert(not dateScroll.ScrollBar:IsShown() and not itemScroll.ScrollBar:IsShown())
-assert(history:GetHeight() == shortHeight)
+assert(history:GetHeight() == LootRollsPlusFrame:GetHeight())
 contains(visibleText(history), "No rolls recorded")
 
 LootRollsPlusDB.historyHeight = math.huge
@@ -957,8 +1097,9 @@ LootRollsPlusDB.pos = {"wrong point", "CENTER", math.huge, 0}
 shortEntries[#shortEntries + 1] = {link = "bad link", rolls = {}}
 LootRollsPlusCharDB.days = {[shortDate] = shortEntries, [17] = "invalid"}
 loadAddon(true)
+local recoveredHeight = LootRollsPlusFrame:GetHeight()
 history = openHistory()
-assert(not LootRollsPlusDB.historyHeight and history:GetHeight() == shortHeight)
+assert(not LootRollsPlusDB.historyHeight and not LootRollsPlusDB.windowHeight and history:GetHeight() == recoveredHeight)
 assert(LootRollsPlusDB.maxDays == 365 and LootRollsPlusCharDB.days[shortDate] == shortEntries)
 assert(nextVisibleRow(LootRollsPlusHistoryScroll.scrollChild).entry == shortEntries[1])
 assert(shortEntries[#shortEntries].link ~= "bad link")
@@ -973,15 +1114,16 @@ assert(LootRollsPlusDB.pos[1] == "TOPLEFT" and LootRollsPlusDB.pos[3] == 10)
 loadAddon(true)
 assert(LootRollsPlusFrame.userPlaced and LootRollsPlusFrame.lastPoint[1] == "TOPLEFT")
 history = openHistory()
-LootRollsPlusDB.historyHeight = 500
+LootRollsPlusDB.windowHeight = 400
 UIParent:SetSize(1000, 281)
 fire("DISPLAY_SIZE_CHANGED")
-assert(history:GetHeight() == 265 and LootRollsPlusDB.historyHeight == 500)
+assert(history:GetHeight() == 265 and LootRollsPlusDB.windowHeight == 400)
 UIParent:SetSize(1400, 900)
 fire("UI_SCALE_CHANGED")
-assert(history:GetHeight() == 500, "resizing the screen must preserve the original history height preference")
-LootRollsPlusDB.historyHeight = nil
+assert(history:GetHeight() == 400, "resizing the screen must preserve the original history height preference")
+LootRollsPlusDB.windowHeight = nil
 fire("UI_SCALE_CHANGED")
+SlashCmdList.LOOTROLLSPLUS("history")
 
 local savedDays = LootRollsPlusCharDB.days
 local oldCounts = {}
@@ -1011,6 +1153,10 @@ contains(firstLive.summary.value, "9|r")
 contains(firstLive.toggleText.value, "+7")
 assert(firstLive.leaders[1].result.value == "|cffff505096|r")
 assert(firstLive.leaders[1].name.value == "|cfff58cbaTirion|r")
+local clientFace = "Fonts\\FRIZQT__.TTF"
+assert(firstLive.leaders[1].name.font == clientFace)
+assert(firstLive.summary.font == clientFace)
+assert(nextVisibleRow(LootRollsPlusFrame).player.font == clientFace)
 assert(firstLive.leaders[1].classIcon:IsVisible() and not firstLive.leaders[1].classUnknown:IsVisible())
 assert(firstLive.leaders[1].classIcon.coords[2] == CLASS_ICON_TCOORDS.PALADIN[2])
 secondLive.toggle:GetScript("OnClick")()
@@ -1344,5 +1490,45 @@ do
     winnerRow:GetScript("OnEnter")(winnerRow)
     contains(table.concat(tooltip, "\n"), "common-radiobutton-dot")
     winnerRow:GetScript("OnLeave")(winnerRow)
+end
+do
+    UIParent:SetSize(1400, 900)
+    LootRollsPlusCharDB.days = {}
+    function IsInRaid() return false end
+    loadAddon(true)
+    local key = 1001
+    wallTime, historyTime = wallTime + 1, historyTime + 1
+    local mage = {playerName = "Other Mage", playerClass = "MAGE", playerGUID = "Player-Mage", state = 0}
+    drops[key] = {lootListKey = key, itemHyperlink = cloth, startTime = historyTime, rollInfos = {mage}}
+    C_LootHistory.GetSortedDropsForEncounter = function() return {drops[key]} end
+    local combat = true
+    function InCombatLockdown() return combat end
+    inspectedUnit = nil
+    fire("LOOT_HISTORY_UPDATE_DROP", 20, key)
+    local entry = nextVisibleRow(LootRollsPlusFrame).entry
+    assert(entry.lootListKey == key and entry.rolls[1].type == "need", "test must capture a fresh Need vote")
+    timerNow = timerNow + 0.5
+    flushTimers()
+    assert(not inspectedUnit and not entry.inspections, "the background inspection must defer in combat")
+    combat = false
+    timerNow = timerNow + 0.5
+    flushTimers()
+    assert(inspectedUnit == "party1", "Need should dispatch inspection without clicking a row")
+    fire("INSPECT_READY", "Player-Mage")
+    local saved = entry.inspections["Other Mage"]
+    assert(saved.atDrop and saved.links[1] == memberItem and saved.guid == "Player-Mage")
+    mage.roll, mage.isWinner = 96, true
+    drops[key].winner = mage
+    fire("LOOT_HISTORY_UPDATE_DROP", 20, key)
+    function GetNumGroupMembers() return 1 end
+    inspectedUnit = nil
+    loadAddon(true)
+    openHistory()
+    local row = nextVisibleRow(LootRollsPlusHistoryScroll.scrollChild)
+    assert(row.entry == entry and row.entry.inspections["Other Mage"] == saved)
+    row:GetScript("OnClick")(row)
+    local card = LootRollsPlusEquippedTooltip
+    assert(card.tooltipLink == memberItem and not inspectedUnit)
+    contains(card.footer, "Inspected during the roll")
 end
 print("Addon TOC, event, and UI integration tests passed")

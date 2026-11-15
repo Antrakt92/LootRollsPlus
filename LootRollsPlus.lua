@@ -7,11 +7,12 @@ local DEFAULT_MAX_DAYS = 365
 local MAX_RETENTION_DAYS = 3650
 local ROW_H = 17
 local WINDOW_PADDING = 34
+local MIN_WINDOW_HEIGHT, MAX_WINDOW_HEIGHT = 153, WINDOW_PADDING + MAX_VISIBLE * ROW_H
 
 local db    -- LootRollsPlusDB: ajustes de la cuenta (posicion, opciones)
 local days  -- LootRollsPlusCharDB.days: historial de este personaje
 local charDB, visits, capture
-local refresh, queueRefresh, toggleDetails
+local refresh, queueRefresh, toggleDetails, UpdateVisibility
 local RenderLiveRolls
 local hoverRow
 local worldReady
@@ -19,17 +20,17 @@ local activeEntries = {}
 local nextActiveOrder = 0
 local isSecret = issecretvalue or function() return false end
 local pendingItems = {}
-local MAIN_WIDTH, HISTORY_WIDTH = 305, 465
+local MAIN_WIDTH, HISTORY_WIDTH = 305, 430
 local STATUS_WIDTH = 137
 local ALERT_MASK = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
 local ALERT_SIZE, ALERT_GAP = 8, 3
+local ALERT_STATUS_GAP = 5
 local ALERT_COLORS = display.WarningColors
 local MAX_PENDING_ITEMS = 100
 local pendingItemCount = 0
 local Label = display.Label
 local UNKNOWN = Label("Result unavailable", "Результат неизвестен")
 local OUTSIDE = Label("No dungeon recorded", "Подземелье не записано")
-local LEGACY = Label("Imported history", "Импортированная история")
 local WAITING = Label("Waiting", "Ожидание")
 local AMBIGUOUS = Label("Overlapping rolls", "Совпавшие розыгрыши")
 local NEED_SUMMARY = Label("Need", "Нужда")
@@ -340,7 +341,6 @@ local function MakeRow(parent, width, compact)
     b.classUnknown:Hide()
     b.alert = b:CreateTexture(nil, "ARTWORK")
     b.alert:SetSize(ALERT_SIZE, ALERT_SIZE)
-    b.alert:SetPoint("RIGHT", b, "RIGHT", -STATUS_WIDTH - 5, 0)
     b.alert:SetTexture("Interface\\Buttons\\WHITE8X8")
     local mask = b:CreateMaskTexture()
     mask:SetTexture(ALERT_MASK, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
@@ -456,7 +456,19 @@ local function FillRow(row, e)
     local status, warning, name, class = StatusText(e)
     SetResult(row, status, name, class)
     local alertColor = ALERT_COLORS[warning]
-    if alertColor then row.alert:SetVertexColor(unpack(alertColor)) end
+    if alertColor then
+        local width = row.right.GetUnboundedStringWidthForText
+            and row.right:GetUnboundedStringWidthForText(status) or row.right:GetStringWidth()
+        local available = row.right:GetWidth()
+        local offset = (finite(width) and width > 0 and math.min(math.ceil(width), available) or available)
+            + ALERT_STATUS_GAP
+        if row.alertOffset ~= offset then
+            row.alertOffset = offset
+            row.alert:ClearAllPoints()
+            row.alert:SetPoint("RIGHT", row.right, "RIGHT", -offset, 0)
+        end
+        row.alert:SetVertexColor(unpack(alertColor))
+    end
     local showAlert = alertColor ~= nil
     if row.showAlert ~= showAlert then
         row.showAlert = showAlert
@@ -486,7 +498,7 @@ end
 local main = NewFrame("LootRollsPlusFrame", nil, MAIN_WIDTH, WINDOW_PADDING + ROW_H)
 main:SetMovable(true)
 main:SetResizable(true)
-main:SetResizeBounds(MAIN_WIDTH, WINDOW_PADDING + ROW_H, MAIN_WIDTH, WINDOW_PADDING + MAX_VISIBLE * ROW_H)
+main:SetResizeBounds(MAIN_WIDTH, MIN_WINDOW_HEIGHT, MAIN_WIDTH, MAX_WINDOW_HEIGHT)
 main:EnableMouse(true)
 main:RegisterForDrag("LeftButton")
 main:SetClampedToScreen(true)
@@ -513,8 +525,18 @@ local function RestoreMainPosition()
     main:SetPoint(pos[1], UIParent, pos[2], pos[3], pos[4])
     main:SetUserPlaced(true)
 end
+
+local function KeepMainTopRight()
+    local right, top = main:GetRight(), main:GetTop()
+    if finite(right) and finite(top) then
+        main:ClearAllPoints()
+        main:SetPoint("TOPRIGHT", UIParent, "BOTTOMLEFT", right, top)
+    end
+end
+
 main:SetScript("OnDragStop", function(self)
     self:StopMovingOrSizing()
+    if self.history:IsShown() or self.options:IsShown() then KeepMainTopRight() end
     SaveMainPosition()
 end)
 
@@ -522,15 +544,47 @@ local title = main:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 title:SetPoint("TOPLEFT", 6, -5)
 title:SetText("|cff80c0ffLoot Rolls Plus|r")
 
-local function TextButton(label)
-    local b = CreateFrame("Button", nil, main)
-    b:SetHeight(16)
+local function PaintButton(button)
+    local highlighted = button.active or button.hovered
+    if button.active then
+        button.bg:SetColorTexture(0.16, 0.29, 0.42, 0.95)
+    elseif button.hovered then
+        button.bg:SetColorTexture(0.18, 0.22, 0.27, 0.95)
+    else
+        button.bg:SetColorTexture(0.09, 0.12, 0.16, 0.95)
+    end
+    if highlighted then
+        button.text:SetTextColor(1, 1, 1)
+    elseif button.destructive then
+        button.text:SetTextColor(1, 0.57, 0.52)
+    else
+        button.text:SetTextColor(1, 0.85, 0.52)
+    end
+end
+
+local function TextButton(label, parent, name, destructive)
+    local b = CreateFrame("Button", name, parent or main)
+    b:SetHeight(17)
+    b.destructive = destructive
+    local edge = b:CreateTexture(nil, "BACKGROUND")
+    edge:SetAllPoints()
+    edge:SetColorTexture(0.27, 0.34, 0.41, 0.9)
+    b.bg = b:CreateTexture(nil, "BORDER")
+    b.bg:SetPoint("TOPLEFT", 1, -1)
+    b.bg:SetPoint("BOTTOMRIGHT", -1, 1)
     b.text = b:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     b.text:SetPoint("CENTER")
     b.text:SetText(label)
-    b:SetWidth(b.text:GetStringWidth() + 8)
-    b:SetScript("OnEnter", function(self) self.text:SetTextColor(1, 1, 1) end)
-    b:SetScript("OnLeave", function(self) self.text:SetTextColor(1, 0.82, 0) end)
+    b:SetWidth(b.text:GetStringWidth() + 14)
+    b:SetScript("OnEnter", function(self)
+        self.hovered = true
+        PaintButton(self)
+    end)
+    b:SetScript("OnLeave", function(self)
+        self.hovered = nil
+        PaintButton(self)
+    end)
+    PaintButton(b)
     return b
 end
 
@@ -538,7 +592,7 @@ local histBtn = TextButton(L.history)
 histBtn:SetPoint("TOPRIGHT", -4, -3)
 
 local optBtn = TextButton(L.options)
-optBtn:SetPoint("RIGHT", histBtn, "LEFT", -2, 0)
+optBtn:SetPoint("RIGHT", histBtn, "LEFT", -4, 0)
 
 local mainRows = {}
 local sizing, dragRows
@@ -547,14 +601,20 @@ local function FitRows(height)
     return math.max(1, math.min(MAX_VISIBLE, math.floor((height - WINDOW_PADDING) / ROW_H)))
 end
 
+local function WindowHeightLimit()
+    local screen = UIParent:GetHeight()
+    return finite(screen) and math.max(MIN_WINDOW_HEIGHT, math.min(screen - 16, MAX_WINDOW_HEIGHT)) or MAX_WINDOW_HEIGHT
+end
+
+local function ApplyWindowHeight()
+    local height = db.windowHeight or WINDOW_PADDING + math.max(1, #Latest(DEFAULT_VISIBLE)) * ROW_H
+    main:SetHeight(math.max(MIN_WINDOW_HEIGHT, math.min(height, WindowHeightLimit())))
+end
+
 local function DrawMain()
-    local fixedRows = sizing and dragRows or db.visibleRows
-    if type(fixedRows) ~= "number" or fixedRows ~= fixedRows or fixedRows < 1 or fixedRows > MAX_VISIBLE then
-        fixedRows = nil
-    end
-    if fixedRows then fixedRows = math.floor(fixedRows) end
-    local latest = Latest(fixedRows or DEFAULT_VISIBLE)
-    if not sizing then main:SetHeight(WINDOW_PADDING + (fixedRows or math.max(1, #latest)) * ROW_H) end
+    if main.options and main.options:IsShown() or main.history and main.history:IsShown() then return end
+    if not sizing then ApplyWindowHeight() end
+    local latest = Latest(sizing and dragRows or FitRows(main:GetHeight()))
     for i, entry in ipairs(latest) do
         local row = mainRows[i]
         if not row then
@@ -571,6 +631,21 @@ local function DrawMain()
 end
 
 local grip = CreateResizeGrip(main, "LootRollsPlusResizeGrip")
+local function HideMainList()
+    grip:Hide()
+    for _, row in ipairs(mainRows) do row:Hide() end
+end
+
+local function DismissOutside(panel, keepOpen)
+    for _, focus in ipairs(GetMouseFoci()) do
+        while focus do
+            if focus == main or keepOpen and keepOpen(focus) then return end
+            focus = focus:GetParent()
+        end
+    end
+    panel:Hide()
+end
+
 grip:SetScript("OnMouseDown", function(_, button)
     if button ~= "LeftButton" or not db then return end
     sizing, dragRows = true, FitRows(main:GetHeight())
@@ -579,7 +654,7 @@ end)
 local function StopSizing()
     if not sizing then return end
     main:StopMovingOrSizing()
-    db.visibleRows = FitRows(main:GetHeight())
+    db.windowHeight = main:GetHeight()
     sizing, dragRows = nil, nil
     refresh()
     SaveMainPosition()
@@ -588,7 +663,8 @@ grip:SetScript("OnMouseUp", function(_, button)
     if button == "LeftButton" then
         StopSizing()
     elseif button == "RightButton" and db and not sizing then
-        db.visibleRows = nil
+        db.windowHeight = nil
+        ApplyWindowHeight()
         refresh()
     end
 end)
@@ -601,6 +677,10 @@ grip:SetScript("OnEnter", function(self)
 end)
 grip:SetScript("OnLeave", ReleaseTooltip)
 main:SetScript("OnSizeChanged", function(_, _, height)
+    if main.history and main.history:IsShown() then
+        main.history:SetHeight(height)
+        return
+    end
     if not sizing then return end
     local rows = FitRows(height)
     if rows == dragRows then return end
@@ -608,26 +688,13 @@ main:SetScript("OnSizeChanged", function(_, _, height)
     DrawMain()
 end)
 
-local HISTORY_MIN_HEIGHT, HISTORY_MAX_HEIGHT, HISTORY_AUTO_HEIGHT = 124, 740, 310
-local HISTORY_TOP, HISTORY_BOTTOM = 29, 21
-local hist = NewFrame("LootRollsPlusHistory", nil, HISTORY_WIDTH, HISTORY_MIN_HEIGHT)
-hist:SetPoint("CENTER")
-hist:SetFrameStrata("DIALOG")
-hist:SetMovable(true)
-hist:SetResizable(true)
-hist:EnableMouse(true)
-hist:RegisterForDrag("LeftButton")
-hist:SetClampedToScreen(true)
-hist:SetScript("OnDragStart", hist.StartMoving)
+local HISTORY_TOP, HISTORY_BOTTOM = 22, 18
+local hist = CreateFrame("Frame", "LootRollsPlusHistory", main)
+main.history = hist
+hist:SetPoint("TOPLEFT")
+hist:SetSize(HISTORY_WIDTH, MIN_WINDOW_HEIGHT)
 hist:Hide()
 tinsert(UISpecialFrames, "LootRollsPlusHistory")
-
-local ht = hist:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-ht:SetPoint("TOPLEFT", 8, -7)
-ht:SetText("Loot Rolls Plus - " .. L.history)
-
-local close = CreateFrame("Button", nil, hist, "UIPanelCloseButton")
-close:SetPoint("TOPRIGHT", 2, 2)
 
 StaticPopupDialogs["LOOTROLLSPLUS_CLEAR"] = {
     text = L.confirmClear,
@@ -644,7 +711,7 @@ StaticPopupDialogs["LOOTROLLSPLUS_CLEAR"] = {
 }
 
 -- Izquierda: lista de dias. Derecha: loot del dia seleccionado.
-local DAY_W = 108
+local DAY_W = 88
 local SCROLL_GUTTER = 23
 
 local dayScroll = CreateFrame("ScrollFrame", "LootRollsPlusDayScroll", hist, "UIPanelScrollFrameTemplate")
@@ -662,8 +729,6 @@ scroll:SetScrollChild(content)
 
 local selectedDay
 local dayButtons, histRows, visitHeaders = {}, {}, {}
-local historySizing
-local historyMaxHeight = HISTORY_MAX_HEIGHT
 local historyEmpty = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 historyEmpty:SetPoint("TOPLEFT", 3, -3)
 historyEmpty:SetText(L.noRolls)
@@ -672,9 +737,11 @@ local function LayoutHistory()
     local viewport = math.max(1, hist:GetHeight() - HISTORY_TOP - HISTORY_BOTTOM)
     local datesOverflow = math.floor(dayContent:GetHeight() - viewport) > 0
     local itemOverflow = math.floor(content:GetHeight() - viewport) > 0
-    local itemsLeft = 8 + DAY_W + (datesOverflow and SCROLL_GUTTER or 0) + 8
+    local dateWidth = #dayKeys > 0 and dayContent:GetWidth() or 0
+    local itemsLeft = 8 + dateWidth + (datesOverflow and SCROLL_GUTTER or 0) + (dateWidth > 0 and 4 or 0)
     local itemWidth = hist:GetWidth() - itemsLeft - 10 - (itemOverflow and SCROLL_GUTTER or 0)
-    dayScroll:SetSize(DAY_W, viewport)
+    dayScroll:SetSize(math.max(1, dateWidth), viewport)
+    dayScroll:SetShown(dateWidth > 0)
     scroll:ClearAllPoints()
     scroll:SetPoint("TOPLEFT", itemsLeft, -HISTORY_TOP)
     scroll:SetSize(itemWidth, viewport)
@@ -692,40 +759,35 @@ local function LayoutHistory()
 end
 
 local function FitHistory()
-    if not historySizing and not db.historyHeight then
-        local height = math.max(dayContent:GetHeight(), content:GetHeight()) + HISTORY_TOP + HISTORY_BOTTOM
-        hist:SetHeight(math.max(HISTORY_MIN_HEIGHT, math.min(HISTORY_AUTO_HEIGHT, historyMaxHeight, height)))
-    end
+    hist:SetHeight(main:GetHeight())
     LayoutHistory()
 end
 
 local function ApplyHistorySize()
-    local screenHeight = UIParent:GetHeight()
-    historyMaxHeight = HISTORY_MAX_HEIGHT
-    if finite(screenHeight) and screenHeight > 0 then
-        historyMaxHeight = math.max(HISTORY_MIN_HEIGHT, math.min(HISTORY_MAX_HEIGHT, screenHeight - 16))
-    end
-    hist:SetResizeBounds(HISTORY_WIDTH, HISTORY_MIN_HEIGHT, HISTORY_WIDTH, historyMaxHeight)
+    main:SetResizeBounds(HISTORY_WIDTH, MIN_WINDOW_HEIGHT, HISTORY_WIDTH, WindowHeightLimit())
+    main:SetWidth(HISTORY_WIDTH)
     hist:SetWidth(HISTORY_WIDTH)
-    if db.historyHeight then hist:SetHeight(math.min(db.historyHeight, historyMaxHeight)) end
 end
 local historyGrip = CreateResizeGrip(hist, "LootRollsPlusHistoryResizeGrip")
 historyGrip:SetScript("OnMouseDown", function(_, button)
     if button ~= "LeftButton" or not db then return end
-    historySizing = true
-    hist:StartSizing("BOTTOM")
+    hist.sizing = true
+    main:StartSizing("BOTTOM")
 end)
 local function StopHistorySizing()
-    if not historySizing then return end
-    hist:StopMovingOrSizing()
-    historySizing = nil
-    db.historyHeight = hist:GetHeight()
+    if not hist.sizing then return end
+    main:StopMovingOrSizing()
+    if hist:IsVisible() then KeepMainTopRight() end
+    hist.sizing = nil
+    db.windowHeight = main:GetHeight()
+    SaveMainPosition()
 end
 historyGrip:SetScript("OnMouseUp", function(_, button)
     if button == "LeftButton" then
         StopHistorySizing()
-    elseif button == "RightButton" and db and not historySizing then
-        db.historyHeight = nil
+    elseif button == "RightButton" and db and not hist.sizing then
+        db.windowHeight = nil
+        ApplyWindowHeight()
         FitHistory()
     end
 end)
@@ -738,8 +800,23 @@ historyGrip:SetScript("OnEnter", function(self)
 end)
 historyGrip:SetScript("OnLeave", ReleaseTooltip)
 
-local function DayText(key)
-    return DayLabel(key) .. " |cff808080(" .. #days[key] .. ")|r"
+local function DayText(key, color)
+    return DayLabel(key) .. (color and " |cff808080(" or " (") .. #days[key] .. (color and ")|r" or ")")
+end
+
+local function FitDates()
+    local maxWidth = 1
+    for _, b in ipairs(dayButtons) do
+        if b:IsShown() then
+            local width = b.text.GetUnboundedStringWidthForText and b.text:GetUnboundedStringWidthForText(DayText(b.key))
+            maxWidth = math.max(maxWidth, finite(width) and math.ceil(width) + 8 or DAY_W)
+        end
+    end
+    maxWidth = math.min(106, maxWidth)
+    dayContent:SetWidth(maxWidth)
+    for _, b in ipairs(dayButtons) do
+        if b:IsShown() then b:SetWidth(maxWidth) end
+    end
 end
 
 local function EnsureSelected()
@@ -761,29 +838,32 @@ local function BuildEntries()
         local key = e.visit and e.visit.id or (e.legacy and "legacy" or "outside")
         local group = byVisit[key]
         if not group then
-            group = { visit = e.visit, entries = {}, label = e.legacy and LEGACY or OUTSIDE }
+            group = { visit = e.visit, imported = e.legacy, entries = {} }
             byVisit[key] = group
             groups[#groups + 1] = group
         end
         group.entries[#group.entries + 1] = e
     end
 
-    local rowIndex, offset = 0, 0
-    for index, group in ipairs(groups) do
-        local header = visitHeaders[index]
-        if not header then
-            header = content:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-            header:SetJustifyH("LEFT")
-            header:SetWidth(content:GetWidth() - 4)
-            header:SetWordWrap(false)
-            visitHeaders[index] = header
+    local rowIndex, headerIndex, offset = 0, 0, 0
+    for _, group in ipairs(groups) do
+        if group.visit or not group.imported then
+            headerIndex = headerIndex + 1
+            local header = visitHeaders[headerIndex]
+            if not header then
+                header = content:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+                header:SetJustifyH("LEFT")
+                header:SetWidth(content:GetWidth() - 4)
+                header:SetWordWrap(false)
+                visitHeaders[headerIndex] = header
+            end
+            header:ClearAllPoints()
+            header:SetPoint("TOPLEFT", 3, -offset)
+            header:SetText(group.visit and (MarkupText(group.visit.name) .. " · " .. date("%H:%M", group.visit.startedAt))
+                or OUTSIDE)
+            header:Show()
+            offset = offset + ROW_H + 4
         end
-        header:ClearAllPoints()
-        header:SetPoint("TOPLEFT", 3, -offset)
-        header:SetText(group.visit and (MarkupText(group.visit.name) .. " · " .. date("%H:%M", group.visit.startedAt))
-            or group.label)
-        header:Show()
-        offset = offset + ROW_H + 4
         for _, e in ipairs(group.entries) do
             rowIndex = rowIndex + 1
             local row = histRows[rowIndex]
@@ -806,7 +886,7 @@ local function BuildEntries()
         histRows[index].entry = nil
         histRows[index]:Hide()
     end
-    for index = #groups + 1, #visitHeaders do visitHeaders[index]:Hide() end
+    for index = headerIndex + 1, #visitHeaders do visitHeaders[index]:Hide() end
     historyEmpty:SetShown(rowIndex == 0)
     content:SetHeight(math.max(offset, ROW_H))
 end
@@ -844,26 +924,34 @@ BuildDayList = function()
             dayButtons[idx] = b
         end
         b.key = dayKeys[i]
-        b.text:SetText(DayText(b.key))
+        b.text:SetText(DayText(b.key, true))
         b.sel:SetShown(b.key == selectedDay)
         b:Show()
     end
+    FitDates()
     dayContent:SetHeight(math.max(#dayKeys * ROW_H, 1))
 end
 
 -- Al llegar una tirada solo se actualiza el contador de ese dia
 local function UpdateDayCount(key)
     for _, b in ipairs(dayButtons) do
-        if b:IsShown() and b.key == key then b.text:SetText(DayText(key)) return end
+        if b:IsShown() and b.key == key then
+            b.text:SetText(DayText(key, true))
+            FitDates()
+            return
+        end
     end
 end
 
 histBtn:SetScript("OnClick", function()
+    main.options:Hide()
     if hist:IsShown() then
         hist:Hide()
     else
-        ApplyHistorySize()
+        main:Show()
+        KeepMainTopRight()
         hist:Show()
+        ApplyHistorySize()
         EnsureSelected()
         BuildDayList()
         BuildEntries()
@@ -1118,11 +1206,6 @@ hist:SetScript("OnSizeChanged", function(self)
     LayoutHistory()
     if detailAnchor == hist then PlaceComparison() end
 end)
-hist:SetScript("OnDragStop", function(self)
-    self:StopMovingOrSizing()
-    if detailAnchor == hist then PlaceComparison() end
-end)
-
 local function ComparisonParticipant(entry, name)
     if entry.ambiguous then return false, "ambiguous" end
     local found, class
@@ -1145,8 +1228,9 @@ local function DrawEquipped(snapshot, status, state)
     local equippedStatus = status
     if equipped then
         equippedStatus = nil
-        if state ~= "ready" then
-            equippedStatus = Label("Last inspected gear", "Экипировка при последнем осмотре")
+        if snapshot.atDrop or state ~= "ready" then
+            equippedStatus = snapshot.atDrop and Label("Inspected during the roll", "Осмотрено во время розыгрыша")
+                or Label("Last inspected gear", "Экипировка при последнем осмотре")
             local at = snapshot.at
             if type(at) == "number" and at > 0 and at < math.huge then
                 local ok, timestamp = pcall(date, L.dateFmt .. " %H:%M", at)
@@ -1158,6 +1242,31 @@ local function DrawEquipped(snapshot, status, state)
         equippedStatus = empty and Label("Equipment slot is empty", "Слот экипировки пуст") or inspectionMessages.noData
     end
     ShowComparisonTooltip(equippedTooltip, equipped, equippedStatus)
+end
+
+local function SavedInspection(entry, name, class, guid)
+    local snapshot = entry.inspections and entry.inspections[name]
+    if snapshot and snapshot.class == class and guid ~= false
+        and (not guid or guid == (inspectedGUIDs[snapshot] or snapshot.guid)) then return snapshot end
+end
+
+local function SaveInspection(entry, name, class, expectedGUID, snapshot, inspectedGUID, atDrop)
+    local unique, actualClass = ComparisonParticipant(entry, name)
+    local currentGUID = capture:GetParticipantGUID(entry, name)
+    local matches = unique and actualClass == class and currentGUID ~= false
+        and (not expectedGUID or currentGUID == expectedGUID)
+        and (not snapshot or not currentGUID or inspectedGUID == currentGUID)
+    if snapshot and matches and HasRoll(entry) then
+        local existing = SavedInspection(entry, name, class, currentGUID)
+        if not existing or not existing.atDrop then
+            entry.inspections = entry.inspections or {}
+            snapshot.class, snapshot.atDrop = class, atDrop
+            snapshot.guid = atDrop and inspectedGUID or nil
+            inspectedGUIDs[snapshot] = inspectedGUID
+            entry.inspections[name] = snapshot
+        end
+    end
+    return matches
 end
 
 local function DrawComparison()
@@ -1183,11 +1292,7 @@ local function DrawComparison()
     if selectedPlayer then
         local unique, class = ComparisonParticipant(detailEntry, selectedPlayer)
         local expectedGUID = capture:GetParticipantGUID(detailEntry, selectedPlayer)
-        snapshot = unique and class == selectedClass and detailEntry.inspections and detailEntry.inspections[selectedPlayer]
-        if snapshot and (snapshot.class ~= class or expectedGUID == false
-            or (expectedGUID and expectedGUID ~= inspectedGUIDs[snapshot])) then
-            snapshot = nil
-        end
+        snapshot = unique and class == selectedClass and SavedInspection(detailEntry, selectedPlayer, class, expectedGUID)
         status = inspectionMessages[inspectionState]
         if not unique or class ~= selectedClass or expectedGUID == false then
             status = inspectionMessages[class == "ambiguous" and "ambiguous" or "unavailable"]
@@ -1204,10 +1309,13 @@ local function ComparePlayer(name, class)
     selectedPlayer, selectedClass = name, class
     local unique, currentClass = ComparisonParticipant(entry, name)
     local expectedGUID = capture:GetParticipantGUID(entry, name)
+    local saved = SavedInspection(entry, name, class, expectedGUID)
     if not unique or currentClass ~= class then
         inspectionState = currentClass == "ambiguous" and "ambiguous" or "unavailable"
     elseif expectedGUID == false then
         inspectionState = "unavailable"
+    elseif saved and saved.atDrop then
+        inspectionState = "ready"
     else
         local _, pending = ns.HasInspectSlot(entry.link)
         if pending then
@@ -1218,18 +1326,7 @@ local function ComparePlayer(name, class)
         end
         inspectionState = nil
         local requestState = inspector:Request(entry.link, name, class, function(status, snapshot, inspectedGUID)
-            local stillUnique, actualClass = ComparisonParticipant(entry, name)
-            local matches = stillUnique and actualClass == class
-            local currentGUID = capture:GetParticipantGUID(entry, name)
-            if expectedGUID and currentGUID ~= expectedGUID then matches = false end
-            if currentGUID == false then matches = false end
-            if snapshot and currentGUID and inspectedGUID ~= currentGUID then matches = false end
-            if snapshot and matches and HasRoll(entry) then
-                entry.inspections = entry.inspections or {}
-                snapshot.class = class
-                inspectedGUIDs[snapshot] = inspectedGUID
-                entry.inspections[name] = snapshot
-            end
+            local matches = SaveInspection(entry, name, class, expectedGUID, snapshot, inspectedGUID)
             if detailEntry == entry and selectedPlayer == name and selectedClass == class then
                 inspectionState = matches and status or "unavailable"
                 DrawComparison()
@@ -1339,10 +1436,33 @@ end)
 local function HideAttachedDetails(anchor)
     if detailAnchor == anchor then details:Hide() end
 end
-main:SetScript("OnHide", HideAttachedDetails)
+main:SetScript("OnHide", function(self)
+    self.options:Hide()
+    hist:Hide()
+    HideAttachedDetails(self)
+end)
+hist:SetScript("OnShow", function(self)
+    self:RegisterEvent("GLOBAL_MOUSE_DOWN")
+    histBtn.active = true
+    PaintButton(histBtn)
+    HideAttachedDetails(main)
+    HideMainList()
+end)
 hist:SetScript("OnHide", function(self)
+    if self:IsShown() then self:Hide() end
+    self:UnregisterEvent("GLOBAL_MOUSE_DOWN")
     StopHistorySizing()
     HideAttachedDetails(self)
+    histBtn.active = nil
+    PaintButton(histBtn)
+    main:SetResizeBounds(MAIN_WIDTH, MIN_WINDOW_HEIGHT, MAIN_WIDTH, WindowHeightLimit())
+    main:SetWidth(MAIN_WIDTH)
+    grip:Show()
+    DrawMain()
+    if main:IsShown() then UpdateVisibility() end
+end)
+hist:SetScript("OnEvent", function(self)
+    DismissOutside(self, function(focus) return detailAnchor == self and focus == details end)
 end)
 
 refresh = function(key)
@@ -1399,8 +1519,8 @@ local function SoloHidden()
     return not isSecret(grouped) and grouped == false
 end
 
-local function UpdateVisibility()
-    main:SetShown(not db.hidden and not SoloHidden())
+UpdateVisibility = function()
+    main:SetShown(not db.hidden and (main.options:IsShown() or not SoloHidden()))
 end
 
 local liveDemo
@@ -1457,98 +1577,167 @@ local function AdvanceLiveDemo(demo)
     end
 end
 
--- Panel de opciones ---------------------------------------------------------
-local opts = NewFrame("LootRollsPlusOptions", nil, 300, 168)
-opts:SetPoint("CENTER")
-opts:SetFrameStrata("DIALOG")
-opts:SetMovable(true)
-opts:EnableMouse(true)
-opts:RegisterForDrag("LeftButton")
-opts:SetClampedToScreen(true)
-opts:SetScript("OnDragStart", opts.StartMoving)
-opts:SetScript("OnDragStop", opts.StopMovingOrSizing)
-opts:Hide()
-tinsert(UISpecialFrames, "LootRollsPlusOptions")
-
-local ot = opts:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-ot:SetPoint("TOPLEFT", 8, -7)
-ot:SetText("Loot Rolls Plus - " .. L.options)
-
-local oclose = CreateFrame("Button", nil, opts, "UIPanelCloseButton")
-oclose:SetPoint("TOPRIGHT", 2, 2)
-
-local soloCheck = CreateFrame("CheckButton", nil, opts, "UICheckButtonTemplate")
-soloCheck:SetSize(24, 24)
-soloCheck:SetPoint("TOPLEFT", 6, -28)
-soloCheck.label = soloCheck:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-soloCheck.label:SetPoint("LEFT", soloCheck, "RIGHT", 2, 0)
-soloCheck.label:SetText(L.hideSolo)
-soloCheck:SetScript("OnClick", function(self)
-    db.hideSolo = self:GetChecked() and true or false
-    UpdateVisibility()
-end)
-
-local liveCheck = CreateFrame("CheckButton", "LootRollsPlusShowLiveRolls", opts, "UICheckButtonTemplate")
-liveCheck:SetSize(24, 24)
-liveCheck:SetPoint("TOPLEFT", 6, -52)
-liveCheck.label = liveCheck:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-liveCheck.label:SetPoint("LEFT", liveCheck, "RIGHT", 2, 0)
-liveCheck.label:SetText(Label("Show choices next to loot rolls", "Показывать выбор рядом с розыгрышем"))
-liveCheck:SetHitRectInsets(0, -235, 0, 0)
-liveCheck:SetScript("OnClick", function(self)
-    db.liveRolls = self:GetChecked() and true or false
-    liveDemo = nil
-    if worldReady then ns.LiveSource:SetEnabled(db.liveRolls) end
-    RenderLiveRolls()
-end)
-
-local positionHeading = opts:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-positionHeading:SetPoint("TOPLEFT", 10, -84)
-positionHeading:SetText(Label("Show comparison on roll click", "Сравнение по клику на бросок"))
-local positionChoices = {
-    { value = "auto", label = Label("Auto", "Авто") },
-    { value = "above", label = Label("Above", "Сверху") },
-    { value = "below", label = Label("Below", "Снизу") },
-}
-local function UpdatePositionOptions()
-    local position = PlayerListPosition()
-    for _, choice in ipairs(positionChoices) do choice.button:SetChecked(choice.value == position) end
-end
-for i, choice in ipairs(positionChoices) do
-    local button = CreateFrame("CheckButton", nil, opts, "UIRadioButtonTemplate")
-    button:SetSize(18, 18)
-    button:SetPoint("TOPLEFT", 10 + (i - 1) * 91, -104)
-    button:SetHitRectInsets(0, -60, 0, 0)
-    local label = button:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    label:SetPoint("LEFT", button, "RIGHT", 3, 0)
-    label:SetText(choice.label)
-    button.position = choice.value
-    button:SetScript("OnClick", function(self)
-        db.playerListPosition = self.position
-        UpdatePositionOptions()
-        if details:IsShown() then DrawComparison() end
-    end)
-    choice.button = button
-end
-
-local clearHistory = CreateFrame("Button", "LootRollsPlusClearHistory", opts, "UIPanelButtonTemplate")
-clearHistory:SetPoint("BOTTOMLEFT", 9, 9)
-clearHistory:SetSize(166, 22)
-clearHistory:SetText(Label("Clear History...", "Очистить историю..."))
-clearHistory:SetScript("OnClick", function()
-    StaticPopup_Show("LOOTROLLSPLUS_CLEAR")
-end)
-
-opts:SetScript("OnShow", function()
-    soloCheck:SetChecked(db.hideSolo)
-    liveCheck:SetChecked(db.liveRolls ~= false)
-    UpdatePositionOptions()
-end)
-
 local function ToggleOptions()
-    opts:SetShown(not opts:IsShown())
+    if main.options:IsShown() then
+        main.options:Hide()
+    else
+        hist:Hide()
+        main:Show()
+        main.options:Show()
+    end
+end
+
+do
+    local opts = CreateFrame("Frame", "LootRollsPlusOptions", main)
+    main.options = opts
+    opts:SetPoint("TOPLEFT", 4, -22)
+    opts:SetPoint("BOTTOMRIGHT", -4, 6)
+    opts:Hide()
+    tinsert(UISpecialFrames, "LootRollsPlusOptions")
+
+    local section = opts:CreateTexture(nil, "BACKGROUND")
+    section:SetPoint("TOPLEFT", 2, -52)
+    section:SetPoint("TOPRIGHT", -2, -52)
+    section:SetHeight(48)
+    section:SetColorTexture(0.09, 0.13, 0.18, 0.85)
+
+    local soloCheck = CreateFrame("CheckButton", "LootRollsPlusHideSolo", opts, "UICheckButtonTemplate")
+    soloCheck:SetSize(24, 24)
+    soloCheck:SetPoint("TOPLEFT", 3, -1)
+    soloCheck.label = soloCheck:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    soloCheck.label:SetPoint("LEFT", soloCheck, "RIGHT", 2, 0)
+    soloCheck.label:SetText(L.hideSolo)
+    soloCheck:SetHitRectInsets(0, -soloCheck.label:GetStringWidth() - 2, 0, 0)
+    soloCheck:SetScript("OnClick", function(self)
+        db.hideSolo = self:GetChecked() and true or false
+        if SoloHidden() then
+            print(Label("Loot Rolls Plus: type /lrplus show to restore the window.",
+                "Loot Rolls Plus: команда /lrplus show вернёт окно."))
+        end
+    end)
+
+    local liveCheck = CreateFrame("CheckButton", "LootRollsPlusShowLiveRolls", opts, "UICheckButtonTemplate")
+    liveCheck:SetSize(24, 24)
+    liveCheck:SetPoint("TOPLEFT", 3, -25)
+    liveCheck.label = liveCheck:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    liveCheck.label:SetPoint("LEFT", liveCheck, "RIGHT", 2, 0)
+    liveCheck.label:SetText(Label("Show choices next to loot rolls", "Показывать выбор рядом с розыгрышем"))
+    liveCheck:SetHitRectInsets(0, -liveCheck.label:GetStringWidth() - 2, 0, 0)
+    liveCheck:SetScript("OnClick", function(self)
+        db.liveRolls = self:GetChecked() and true or false
+        liveDemo = nil
+        if worldReady then ns.LiveSource:SetEnabled(db.liveRolls) end
+        RenderLiveRolls()
+    end)
+
+    local positionHeading = opts:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    positionHeading:SetPoint("TOPLEFT", 10, -58)
+    positionHeading:SetText(Label("Show comparison on roll click", "Сравнение по клику на бросок"))
+    local positionChoices = {
+        { value = "auto", label = Label("Auto", "Авто") },
+        { value = "above", label = Label("Above", "Сверху") },
+        { value = "below", label = Label("Below", "Снизу") },
+    }
+    local function UpdatePositionOptions()
+        local position = PlayerListPosition()
+        for _, choice in ipairs(positionChoices) do choice.button:SetChecked(choice.value == position) end
+    end
+    for i, choice in ipairs(positionChoices) do
+        local button = CreateFrame("CheckButton", nil, opts, "UIRadioButtonTemplate")
+        button:SetSize(18, 18)
+        button:SetPoint("TOPLEFT", 9 + (i - 1) * 86, -77)
+        local label = button:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        label:SetPoint("LEFT", button, "RIGHT", 3, 0)
+        label:SetText(choice.label)
+        button:SetHitRectInsets(0, -label:GetStringWidth() - 3, 0, 0)
+        button.position = choice.value
+        button:SetScript("OnClick", function(self)
+            db.playerListPosition = self.position
+            UpdatePositionOptions()
+            if details:IsShown() then DrawComparison() end
+        end)
+        choice.button = button
+    end
+
+    local clearHistory = TextButton(Label("Clear History...", "Очистить историю..."), opts, "LootRollsPlusClearHistory", true)
+    clearHistory:SetPoint("TOPLEFT", 3, -108)
+    clearHistory:SetScript("OnClick", function()
+        StaticPopup_Show("LOOTROLLSPLUS_CLEAR")
+    end)
+
+    opts:SetScript("OnShow", function(self)
+        self:RegisterEvent("GLOBAL_MOUSE_DOWN")
+        optBtn.active = true
+        PaintButton(optBtn)
+        HideMainList()
+        grip:Show()
+        KeepMainTopRight()
+        soloCheck:SetChecked(db.hideSolo)
+        liveCheck:SetChecked(db.liveRolls ~= false)
+        UpdatePositionOptions()
+    end)
+
+    opts:SetScript("OnHide", function(self)
+        -- A hidden parent can trigger OnHide without clearing the child's shown flag.
+        if self:IsShown() then self:Hide() end
+        self:UnregisterEvent("GLOBAL_MOUSE_DOWN")
+        optBtn.active = nil
+        PaintButton(optBtn)
+        grip:Show()
+        DrawMain()
+        if main:IsShown() then UpdateVisibility() end
+    end)
+
+    opts:SetScript("OnEvent", function(self) DismissOutside(self) end)
 end
 optBtn:SetScript("OnClick", ToggleOptions)
+
+local function RestoreRollWindow()
+    db.hidden, db.hideSolo = false, false
+    main.options:Hide()
+    hist:Hide()
+    UpdateVisibility()
+end
+
+if Settings and type(Settings.RegisterCanvasLayoutCategory) == "function"
+    and type(Settings.RegisterAddOnCategory) == "function" then
+    local page = CreateFrame("Frame")
+    local logo = page:CreateTexture(nil, "ARTWORK")
+    logo:SetSize(36, 36)
+    logo:SetPoint("TOPLEFT", 16, -16)
+    logo:SetTexture("Interface\\AddOns\\LootRollsPlus\\media\\addon-icon.png")
+    local heading = page:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    heading:SetPoint("LEFT", logo, "RIGHT", 10, 0)
+    heading:SetText("Loot Rolls Plus")
+
+    local hideSolo = CreateFrame("CheckButton", nil, page, "UICheckButtonTemplate")
+    hideSolo:SetSize(24, 24)
+    hideSolo:SetPoint("TOPLEFT", logo, "BOTTOMLEFT", 0, -14)
+    local label = hideSolo:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    label:SetPoint("LEFT", hideSolo, "RIGHT", 4, 0)
+    label:SetText(L.hideSolo)
+    hideSolo:SetHitRectInsets(0, -label:GetStringWidth() - 4, 0, 0)
+    hideSolo:SetScript("OnClick", function(self)
+        if not db then return end
+        db.hideSolo = not not self:GetChecked()
+        main.options:Hide()
+        UpdateVisibility()
+    end)
+
+    local restore = CreateFrame("Button", nil, page, "UIPanelButtonTemplate")
+    restore:SetSize(180, 26)
+    restore:SetPoint("TOPLEFT", hideSolo, "BOTTOMLEFT", 0, -14)
+    restore:SetText(Label("Show Roll Window", "Показать окно роллов"))
+    restore:SetScript("OnClick", function()
+        if not db then return end
+        RestoreRollWindow()
+        hideSolo:SetChecked(false)
+        if SettingsPanel and SettingsPanel:IsShown() and HideUIPanel then HideUIPanel(SettingsPanel) end
+    end)
+
+    page:SetScript("OnShow", function() hideSolo:SetChecked(db and not not db.hideSolo or false) end)
+    Settings.RegisterAddOnCategory(Settings.RegisterCanvasLayoutCategory(page, "Loot Rolls Plus"))
+end
 
 ---------------------------------------------------------------------------
 -- Eventos
@@ -1578,7 +1767,68 @@ local function TryImport()
     if imported or recovered > 0 then refresh() end
 end
 
-local function RecordDrop(entry, isNew)
+local QueueDropInspections, ResetDropInspections
+do
+    local jobs, seen, timer = {}, setmetatable({}, { __mode = "k" }), nil
+    local function Schedule()
+        if timer or #jobs == 0 then return end
+        local token = {}
+        timer = token
+        C_Timer.After(0.5, function()
+            if timer ~= token then return end
+            timer = nil
+            local job = table.remove(jobs, 1)
+            local entry, name, class = job.entry, job.name, job.class
+            local unique, currentClass = ComparisonParticipant(entry, name)
+            if worldReady and GetTime() < job.expires and HasRoll(entry) and unique and currentClass == class
+                and capture:GetParticipantGUID(entry, name) == job.guid then
+                local hasSlot, pending = ns.HasInspectSlot(entry.link)
+                if pending then
+                    RequestItemData(entry.link)
+                    jobs[#jobs + 1] = job
+                elseif hasSlot then
+                    local status = inspector:Request(entry.link, name, class, function(_, snapshot, guid)
+                        if snapshot and SaveInspection(entry, name, class, job.guid, snapshot, guid, true)
+                            and detailEntry == entry then DrawComparison() end
+                    end, job.guid)
+                    if status == "busy" or status == "combat" or status == "inspectOpen" then
+                        table.insert(jobs, 1, job)
+                    end
+                end
+            end
+            Schedule()
+        end)
+    end
+
+    QueueDropInspections = function(entry)
+        if entry.legacy or entry.ambiguous or entry.stale or time() - entry.t > 180 then return end
+        local tried = seen[entry] or {}
+        seen[entry] = tried
+        local function Add(name, class)
+            if not name or not class or #jobs >= 40 then return end
+            local guid = capture:GetParticipantGUID(entry, name)
+            local unique, currentClass = ComparisonParticipant(entry, name)
+            local saved = SavedInspection(entry, name, class, guid)
+            if not unique or currentClass ~= class or guid == false or tried[name] == (guid or class)
+                or (saved and saved.atDrop) then return end
+            tried[name] = guid or class
+            jobs[#jobs + 1] = { entry = entry, name = name, class = class, guid = guid, expires = GetTime() + 20 }
+        end
+        if entry.done then Add(entry.winner, entry.winnerClass) end
+        for _, roll in ipairs(entry.rolls) do
+            if roll.type == "need" then Add(roll.name, roll.class) end
+        end
+        Schedule()
+    end
+
+    ResetDropInspections = function()
+        wipe(jobs)
+        wipe(seen)
+        timer = nil
+    end
+end
+
+local function RecordDrop(entry, isNew, baseline)
     local key = DayKey(entry.t)
     local newDay
     if isNew then
@@ -1602,6 +1852,7 @@ local function RecordDrop(entry, isNew)
     else
         activeEntries[entry] = nil
     end
+    if worldReady and not baseline then QueueDropInspections(entry) end
     if newDay then queueRefresh() else queueRefresh(key) end
 end
 
@@ -1676,10 +1927,12 @@ ev:SetScript("OnEvent", function(_, event, a1, a2, ...)
             if type(maxDays) ~= "number" or not (maxDays >= 1 and maxDays <= MAX_RETENTION_DAYS and maxDays % 1 == 0) then
                 db.maxDays = DEFAULT_MAX_DAYS
             end
-            local historyHeight = db.historyHeight
-            if type(historyHeight) ~= "number" or not (historyHeight >= HISTORY_MIN_HEIGHT and historyHeight <= HISTORY_MAX_HEIGHT) then
-                db.historyHeight = nil
+            if not finite(db.windowHeight) or db.windowHeight < MIN_WINDOW_HEIGHT or db.windowHeight > MAX_WINDOW_HEIGHT then
+                local rows = db.visibleRows
+                db.windowHeight = finite(rows) and rows >= 1 and rows <= MAX_VISIBLE
+                    and math.max(MIN_WINDOW_HEIGHT, WINDOW_PADDING + math.floor(rows) * ROW_H) or nil
             end
+            db.visibleRows, db.historyHeight = nil, nil
             if type(charDB.days) ~= "table" then charDB.days = {} end
             days = charDB.days
             ns.History.NormalizeDays(days, DayKey)
@@ -1708,15 +1961,21 @@ ev:SetScript("OnEvent", function(_, event, a1, a2, ...)
             liveDemo = nil
             ns.LiveView:Hide()
             inspector:CancelPending()
+            ResetDropInspections()
             details:Hide()
         elseif event == "PLAYER_LOGOUT" then
             SaveMainPosition()
         elseif event == "DISPLAY_SIZE_CHANGED" or event == "UI_SCALE_CHANGED" then
             if liveDemo then C_Timer.After(0, RenderLiveRolls) end
-            if hist:IsShown() and not historySizing then
+            if hist:IsShown() and not hist.sizing then
                 ApplyHistorySize()
+                ApplyWindowHeight()
                 FitHistory()
                 if detailAnchor == hist then PlaceComparison() end
+            elseif not sizing then
+                main:SetResizeBounds(MAIN_WIDTH, MIN_WINDOW_HEIGHT, MAIN_WIDTH, WindowHeightLimit())
+                ApplyWindowHeight()
+                DrawMain()
             end
         elseif event == "ZONE_CHANGED_NEW_AREA" then
             if worldReady then UpdateVisit(false) end
@@ -1761,6 +2020,8 @@ SlashCmdList.LOOTROLLSPLUS = function(msg)
         histBtn:GetScript("OnClick")()
     elseif msg == "config" or msg == "options" or msg == "opciones" then
         ToggleOptions()
+    elseif msg == "show" then
+        RestoreRollWindow()
     elseif msg == "reset" then
         StaticPopup_Show("LOOTROLLSPLUS_CLEAR")
     elseif msg == "days" or msg:match("^days%s") then
