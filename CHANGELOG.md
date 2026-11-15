@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.1 — 15-Nov-2026 — Duplicate loot rolls
+
+- Fix duplicate rows marked “Overlapping rolls” when the loot prompt and the game’s loot history report the same drop at different times.
+
 ## 1.1.0 — 15-Nov-2026 — Saved equipment comparisons
 
 - Save matching equipment when a player who chooses Need or wins a recent drop can be inspected. Open the roll later in History to see the saved item.

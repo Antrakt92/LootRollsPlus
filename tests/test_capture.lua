@@ -455,6 +455,58 @@ assert(#row == 2 and row[1].done and not row[2].ambiguous,
 setDrops()
 engine = new()
 engine:Start()
+local delayedPrompt = drop(30, clock)
+setDrops(delayedPrompt)
+emitDrop(engine, 30)
+advance(4)
+C_Loot = { GetLootRollDuration = function() return 10000 end }
+GetLootRollTimeLeft = function() return 6000 end
+start(70)
+assert(#row == 1 and row[1].capture == "history", "a delayed START for the same popup must not add an overlapping row")
+start(70)
+assert(#row == 1, "a repeated START must not recreate a suppressed popup")
+delayedPrompt.winner = quickWinner
+emitDrop(engine, 30)
+assert(#row == 1 and row[1].winnerValue == 42)
+GetLootRollTimeLeft = function() return 10000 end
+start(71)
+assert(#row == 2 and row[2].capture == "chat", "a new identical popup after the winner is still a separate roll")
+
+setDrops()
+engine = new()
+engine:Start()
+local historicalStart = clock
+advance(4)
+GetLootRollTimeLeft = function() return 6000 end
+start(72)
+setDrops(drop(31, historicalStart))
+emitDrop(engine, 31)
+assert(#row == 1 and row[1].capture == "history" and #removed == 1,
+    "a delayed provisional row must be replaced when the native record arrives later")
+C_Loot, GetLootRollTimeLeft = nil, nil
+
+setDrops()
+engine = new()
+engine:Start()
+local firstCopy = drop(32, clock)
+setDrops(firstCopy)
+emitDrop(engine, 32)
+start(73)
+advance(1)
+start(74)
+assert(#row == 2 and row[2].capture == "chat", "one native record cannot cover two overlapping popups")
+local secondCopy = drop(33, clock)
+setDrops(firstCopy, secondCopy)
+emitDrop(engine, 33)
+firstCopy.winner, secondCopy.winner = quickWinner, roll("Priest", "PRIEST", 3, 69)
+emitDrop(engine, 32)
+emitDrop(engine, 33)
+assert(#row == 2 and row[1].winnerValue == 42 and row[2].winnerValue == 69,
+    "each identical drop retains its own native result")
+
+setDrops()
+engine = new()
+engine:Start()
 local known = roll("Unique", "MAGE", 0)
 known.playerGUID = "Player-Known"
 local otherParticipant = roll("Other Person", "PRIEST", 3)

@@ -12,6 +12,7 @@ ns.CaptureEvents = {
 }
 
 local isSecret = _G.issecretvalue or function() return false end
+local START_TOLERANCE = 2
 
 local function clean(value, expectedType)
     if isSecret(value) or type(value) ~= expectedType then return nil end
@@ -382,8 +383,8 @@ function ns.NewCapture(callbacks)
     local chatRules = compileChatRules()
     local chatByID = {}
     local chatByLink = {}
-    local nativeStarts = {}
     local nativeActive = {}
+    local coveredRolls = {}
     local canSchedule = type(_G.C_Timer) == "table" and type(_G.C_Timer.After) == "function"
     local fallbackAvailable = type(_G.GetLootRollItemLink) == "function"
         and canSchedule and #chatRules > 0
@@ -419,7 +420,8 @@ function ns.NewCapture(callbacks)
         end
     end
 
-    local function markAmbiguous(slot)
+    local function markAmbiguous(slot, competingPopup)
+        if competingPopup then slot.competingPopup = true end
         local entry = slot.entry
         if entry.ambiguous then return end
         entry.ambiguous = true
@@ -479,29 +481,36 @@ function ns.NewCapture(callbacks)
         return false
     end
 
-    local function blockChatForNative(identity, startedAt, nativeSlot)
-        local active = nativeActive[identity]
-        if active and active[nativeSlot] then
-            local marker = { t = startedAt, slot = nativeSlot }
-            nativeStarts[identity] = marker
-            _G.C_Timer.After(2, function()
-                if nativeStarts[identity] == marker then nativeStarts[identity] = nil end
-            end)
-        end
+    local function coverRoll(rollID, nativeSlot, lifetime)
+        nativeSlot.covered = true
+        local token = {}
+        coveredRolls[rollID] = token
+        _G.C_Timer.After(lifetime, function()
+            if coveredRolls[rollID] == token then coveredRolls[rollID] = nil end
+        end)
+    end
+
+    local function sameStart(nativeSlot, historyStart, observedAt)
+        if historyStart then return math.abs(nativeSlot.startTime - historyStart) <= START_TOLERANCE end
+        return nativeSlot.startedAt and math.abs(nativeSlot.startedAt - observedAt) <= START_TOLERANCE
+    end
+
+    local function blockChatForNative(identity, nativeSlot)
         local slots = chatByLink[identity]
         if not slots then return end
         local candidate, multiple
         for _, slot in pairs(slots) do
-            if math.abs(slot.entry.t - startedAt) <= 1 then
+            if sameStart(nativeSlot, slot.historyStart, slot.entry.t) then
                 multiple = multiple or candidate ~= nil
                 candidate = slot
             end
         end
         if multiple then
             for _, slot in pairs(slots) do
-                if math.abs(slot.entry.t - startedAt) <= 1 then markAmbiguous(slot) end
+                if sameStart(nativeSlot, slot.historyStart, slot.entry.t) then markAmbiguous(slot, true) end
             end
-        elseif candidate and not candidate.entry.ambiguous then
+        elseif candidate and not candidate.competingPopup and not nativeSlot.covered then
+            coverRoll(candidate.id, nativeSlot, math.max(2, candidate.expires - time()))
             suppressChatSlot(candidate)
         end
         if nativeActive[identity] then
@@ -518,27 +527,44 @@ function ns.NewCapture(callbacks)
         if not fallbackAvailable then return end
         local rollID = id(rollID)
         local duration = clean(rollTime, "number")
-        if not rollID or not duration or duration <= 0 then return end
+        if not rollID or not duration or duration <= 0 or chatByID[rollID] or coveredRolls[rollID] then return end
         local link, identity = itemLink(read(_G.GetLootRollItemLink, rollID))
         if not link then return end
         local observedAt = time()
-        local nativeStart = nativeStarts[identity]
         local active = nativeActive[identity]
-        if nativeStart and active and active[nativeStart.slot] and math.abs(observedAt - nativeStart.t) <= 1 then
-            return
+        local historyStart = clean(read(api.GetLootHistoryTime), "number")
+        local loot = clean(_G.C_Loot, "table")
+        local fullDuration = loot and clean(read(loot.GetLootRollDuration, rollID), "number")
+        local remaining = clean(read(_G.GetLootRollTimeLeft, rollID), "number")
+        if historyStart and fullDuration and remaining and remaining > 0 and remaining <= fullDuration
+            and fullDuration <= 180000 then
+            historyStart = historyStart - (fullDuration - remaining) / 1000
         end
-        if chatByID[rollID] then return end
 
         local lifetime = math.min(180, math.ceil(duration / 1000) + 5)
+        local nativeMatch, multiple
+        for nativeSlot in pairs(active or {}) do
+            if not nativeSlot.covered and sameStart(nativeSlot, historyStart, observedAt) then
+                multiple = nativeMatch ~= nil
+                if multiple then break end
+                nativeMatch = nativeSlot
+            end
+        end
+        if nativeMatch and not multiple then
+            coverRoll(rollID, nativeMatch, lifetime)
+            return
+        end
         local entry = { link = link, t = observedAt, rolls = {}, capture = "chat" }
         if active then entry.ambiguous = true end
-        local slot = { id = rollID, identity = identity, entry = entry, expires = observedAt + lifetime }
+        local slot = { id = rollID, identity = identity, entry = entry, expires = observedAt + lifetime,
+            historyStart = historyStart }
         local group = chatByLink[identity] or {}
         chatByLink[identity] = group
         for _, other in pairs(group) do
             if not other.entry.done and not other.entry.closed and observedAt <= other.expires then
                 entry.ambiguous = true
-                markAmbiguous(other)
+                slot.competingPopup = true
+                markAmbiguous(other, true)
             end
         end
         group[rollID], chatByID[rollID] = slot, slot
@@ -578,7 +604,7 @@ function ns.NewCapture(callbacks)
                     local _, identity = itemLink(read(_G.GetLootRollItemLink, rollID))
                     if not identity then return end
                     if identity == parsed.identity then
-                        markAmbiguous(target)
+                        markAmbiguous(target, true)
                         return
                     end
                 end
@@ -710,7 +736,10 @@ function ns.NewCapture(callbacks)
             presentationWinner = ns.FindWinningLootRoll(raw.rollInfos, entry.winner, slot.winnerGUID, entry.winnerClass)
         end
         local changed = observeNativeActivity(slot, raw, winnerInfo ~= nil or winningRoll ~= nil or allpassed) or isNew
-        if knownStartedAt and fallbackAvailable then blockChatForNative(identity, knownStartedAt, slot) end
+        if knownStartedAt then slot.startedAt = knownStartedAt end
+        if fallbackAvailable and not baseline and (knownStartedAt or slot.expiry) then
+            blockChatForNative(identity, slot)
+        end
         if sourceName and sourceName ~= entry.sourceName then
             entry.sourceName = sourceName
             changed = true
@@ -818,7 +847,7 @@ function ns.NewCapture(callbacks)
     function engine:Reset()
         seen = {}
         participantGUIDs = setmetatable({}, { __mode = "k" })
-        chatByID, chatByLink, nativeStarts, nativeActive = {}, {}, {}, {}
+        chatByID, chatByLink, coveredRolls, nativeActive = {}, {}, {}, {}
         if available and started then
             -- Suppress rows still in the game's history after an addon history reset.
             baseline()
@@ -842,10 +871,12 @@ function ns.NewCapture(callbacks)
             return
         elseif event == "CANCEL_LOOT_ROLL" then
             local rollID = id(arg1)
+            if rollID then coveredRolls[rollID] = nil end
             local slot = rollID and chatByID[rollID]
             if slot then closeChatSlot(slot) end
             return
         elseif event == "CANCEL_ALL_LOOT_ROLLS" then
+            coveredRolls = {}
             for _, slot in pairs(chatByID) do closeChatSlot(slot) end
             return
         end
@@ -853,7 +884,7 @@ function ns.NewCapture(callbacks)
         if event == "LOOT_HISTORY_CLEAR_HISTORY" then
             local previous = seen
             seen = {}
-            nativeStarts, nativeActive = {}, {}
+            coveredRolls, nativeActive = {}, {}
             participantGUIDs = setmetatable({}, { __mode = "k" })
             captureStart = clean(read(api.GetLootHistoryTime), "number")
             for _, drops in pairs(previous) do
