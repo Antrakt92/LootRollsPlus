@@ -193,7 +193,7 @@ local function fitCard(card, anchor, entry, raid)
     end
     local rightSpace = screenWidth - right - 2 * GAP
     local leftSpace = left - 2 * GAP
-    local onRight = rightSpace >= preferred or (leftSpace < preferred and rightSpace >= leftSpace)
+    local onRight = leftSpace < minimum
     local width = math.floor(math.min(preferred, onRight and rightSpace or leftSpace))
     if width < minimum then return false end
     if card.anchor ~= anchor or card.onRight ~= onRight or card:GetWidth() ~= width then
@@ -308,20 +308,15 @@ local function positionDetails(frame, card)
     local right = scalePosition(card, "GetRight")
     local screenWidth = UIParent:GetWidth()
     if not finite(screenWidth) or screenWidth <= 0 then return end
-    local oppositeEdge = scalePosition(card.anchor, card.onRight and "GetLeft" or "GetRight")
-    local oppositeSpace = oppositeEdge and (card.onRight and oppositeEdge or screenWidth - oppositeEdge)
+    local popupLeft = card.onRight and scalePosition(card.anchor, "GetLeft")
     frame:ClearAllPoints()
     local width = frame:GetWidth()
     if card.onRight and right and screenWidth - right >= width + 2 * GAP then
         frame:SetPoint("TOPLEFT", card, "TOPRIGHT", GAP, 0)
     elseif not card.onRight and left and left >= width + 2 * GAP then
         frame:SetPoint("TOPRIGHT", card, "TOPLEFT", -GAP, 0)
-    elseif oppositeSpace and oppositeSpace >= width + 2 * GAP then
-        if card.onRight then
-            frame:SetPoint("TOPRIGHT", card.anchor, "TOPLEFT", -GAP, 0)
-        else
-            frame:SetPoint("TOPLEFT", card.anchor, "TOPRIGHT", GAP, 0)
-        end
+    elseif popupLeft and popupLeft >= width + 2 * GAP then
+        frame:SetPoint("TOPRIGHT", card.anchor, "TOPLEFT", -GAP, 0)
     else
         -- Keep the disclosure clear of the native buttons when both horizontal options are full.
         local below = scalePosition(card, "GetBottom")

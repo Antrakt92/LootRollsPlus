@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.2 — 15-Nov-2026 — Loot roll panel placement
+
+- Place live roll panels to the left of the loot prompt when there is room, leaving space for Pawn’s comparison on the right.
+- Keep the expanded raid list beside the left panel or above or below it when space is tight.
+
 ## 1.1.1 — 15-Nov-2026 — Duplicate loot rolls
 
 - Fix duplicate rows marked “Overlapping rolls” when the loot prompt and the game’s loot history report the same drop at different times.

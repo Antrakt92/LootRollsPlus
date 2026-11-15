@@ -1137,7 +1137,8 @@ contains(firstLive.summary.value, "2|r")
 contains(firstLive.summary.value, "lootroll-icon-need")
 contains(firstLive.summary.value, "lootroll-icon-greed")
 contains(firstLive.summary.value, "lootroll-icon-pass")
-assert(firstLive:GetHeight() < 50 and firstLive.lastPoint[1] == "LEFT")
+assert(firstLive:GetHeight() < 50 and firstLive.lastPoint[1] == "RIGHT" and firstLive.lastPoint[3] == "LEFT",
+    "live summaries should use the left even when both sides have room")
 firstLive.toggle:GetScript("OnClick")()
 local liveDetails = LootRollsPlusLiveDetails
 assert(liveDetails:IsVisible() and liveDetails.slider:IsVisible() and liveDetails.slider.maxValue == 32)
@@ -1173,13 +1174,13 @@ local demoPrompts = { LootRollsPlusLiveDemo1, LootRollsPlusLiveDemo2, LootRollsP
 for i, card in ipairs(demoCards) do
     local prompt = demoPrompts[i]
     prompt.mockLeft, prompt.mockRight = 186, 463
-    card.mockLeft, card.mockRight = 469, 644
+    card.mockLeft, card.mockRight = 5, 181
     card.mockBottom = 20 + i * 100
     card.mockTop = card.mockBottom + 42
 end
 fire("DISPLAY_SIZE_CHANGED")
 firstLive.toggle:GetScript("OnClick")()
-assert(liveDetails.lastPoint[1] == "BOTTOMLEFT" and liveDetails.lastPoint[2] == thirdLive,
+assert(liveDetails.lastPoint[1] == "BOTTOMRIGHT" and liveDetails.lastPoint[2] == thirdLive,
     "the detail view should fit above the other summaries in a narrow stack")
 for i, card in ipairs(demoCards) do
     local prompt = demoPrompts[i]
@@ -1295,9 +1296,13 @@ assert(live.rows[2].highlight:IsVisible(), "your pending choice is displayed")
 assert(nativeLootFrame.lastPoint == nil and next(nativeLootFrame.scripts) == nil,
     "the view must leave the Blizzard popup's handlers and placement alone")
 
+nativeLootFrame.mockLeft, nativeLootFrame.mockRight = 350, 627
+tickLiveSource()
+assert(live:IsVisible() and live.lastPoint[1] == "RIGHT" and live.lastPoint[3] == "LEFT",
+    "party choices should leave the right of the loot popup open when both sides fit")
 nativeLootFrame.mockLeft, nativeLootFrame.mockRight = 40, 317
 tickLiveSource()
-assert(live:IsVisible() and live.lastPoint[1] == "LEFT", "moving the native frame must relayout the sidecar")
+assert(live:IsVisible() and live.lastPoint[1] == "LEFT", "use the right side only when the left is too narrow")
 nativeLootFrame.mockLeft, nativeLootFrame.mockRight = nil, nil
 tickLiveSource()
 assert(not live:IsVisible(), "native popup bounds can briefly be unavailable")
