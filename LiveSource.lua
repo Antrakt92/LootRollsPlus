@@ -42,6 +42,25 @@ local function read(method, ...)
     if ok and not isSecret(value) then return value end
 end
 
+local function updateObservationStart(observation, id, historyTime, duration, allowFallback)
+    if not historyTime or observation.start and (not observation.provisionalStart or observation.historyKey) then return end
+    local api = clean(_G.C_Loot, "table")
+    local fullDuration = (api and number(read(api.GetLootRollDuration, id))) or number(duration)
+    local remaining = number(read(_G.GetLootRollTimeLeft, id))
+    if fullDuration and remaining and remaining > 0 and remaining <= fullDuration and fullDuration <= 180000 then
+        observation.start = historyTime - (fullDuration - remaining) / 1000
+        observation.provisionalStart = nil
+    elseif allowFallback and not observation.start then
+        -- START can reach us after the popup has already begun counting down.
+        observation.start, observation.provisionalStart = historyTime, true
+    end
+end
+
+local function confirmedStart(observation)
+    -- The START delivery time can overlap a different drop of the same item.
+    if not observation.provisionalStart then return observation.start end
+end
+
 local function itemLink(value)
     return type(ns.GetItemLinkIdentity) == "function" and ns.GetItemLinkIdentity(value)
 end
@@ -198,10 +217,11 @@ local function readHistory(api, interests, updates, previous, retries, now)
 end
 
 local function matchHistory(observation, choices)
-    if not choices or not observation.start then return end
+    local start = confirmedStart(observation)
+    if not choices or not start then return end
     local match
     for _, candidate in pairs(choices) do
-        if math.abs(candidate.start - observation.start) <= START_TOLERANCE then
+        if math.abs(candidate.start - start) <= START_TOLERANCE then
             if match then
                 observation.ambiguous = true
                 return
@@ -271,7 +291,6 @@ function Source:Refresh(scanHistory)
     local historyTime = number(read(api.GetLootHistoryTime))
     local now = number(read(_G.GetTime)) or 0
     local slots, ids, interests, owners = {}, {}, {}, {}
-    local lootApi = clean(_G.C_Loot, "table") or {}
     local missingIdentity = false
 
     local function observe(id, anchor, duration)
@@ -288,13 +307,7 @@ function Source:Refresh(scanHistory)
             local identity = itemLink(link)
             if identity then observation.link, observation.identity = link, identity end
         end
-        if not observation.start and historyTime then
-            local left = number(read(_G.GetLootRollTimeLeft, id))
-            duration = duration or number(read(lootApi.GetLootRollDuration, id))
-            if left and duration and left > 0 and left <= duration then
-                observation.start = historyTime - (duration - left) / 1000
-            end
-        end
+        updateObservationStart(observation, id, historyTime, duration)
         local ambiguous = self.disabledAmbiguity and self.disabledAmbiguity[id]
         if ambiguous and observation.identity == ambiguous.identity
             and (not observation.start or not ambiguous.start
@@ -312,7 +325,8 @@ function Source:Refresh(scanHistory)
             missingIdentity = true
         end
         if anchor and observation.identity then
-            if observation.start then interests[observation.identity] = observation.start end
+            local start = confirmedStart(observation)
+            if start then interests[observation.identity] = start end
             return observation
         end
     end
@@ -356,9 +370,10 @@ function Source:Refresh(scanHistory)
     local identityChanged, layoutChanged = false, false
     for _, item in ipairs(active) do
         local observation = item.observation
-        if not observation.visible or observation.lookupStart ~= observation.start then identityChanged = true end
+        local start = confirmedStart(observation)
+        if not observation.visible or observation.lookupStart ~= start then identityChanged = true end
         if geometryChanged(observation, item.anchor) then layoutChanged = true end
-        observation.lookupStart = observation.start
+        observation.lookupStart = start
     end
     for _, observation in pairs(self.observations) do observation.visible = false end
     if identityChanged then
@@ -466,7 +481,7 @@ function Source:OnEvent(event, first, second)
             local identity = itemLink(link)
             local observation = self.observations[id] or {}
             if identity and observation.identity and identity ~= observation.identity then observation = {} end
-            observation.start = observation.start or number(read(api.GetLootHistoryTime))
+            updateObservationStart(observation, id, number(read(api.GetLootHistoryTime)), second, true)
             observation.seenAt = number(read(_G.GetTime))
             if identity then observation.identity, observation.link = identity, link end
             if identity then

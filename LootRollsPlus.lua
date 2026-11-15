@@ -1118,6 +1118,8 @@ local detailEntry, detailDisenchant, liveComparison
 local inspector = ns.NewInspect()
 local selectedPlayer, selectedClass, inspectionState
 local inspectedGUIDs = setmetatable({}, { __mode = "k" })
+local inspectionReplacements = setmetatable({}, {__mode = "k"})
+local StageInspectionTransfer
 details:SetScript("OnShow", function(self)
     self:RegisterEvent("GLOBAL_MOUSE_DOWN")
 end)
@@ -1129,6 +1131,7 @@ details:SetScript("OnHide", function(self)
     droppedTooltip:Hide()
     equippedTooltip:Hide()
     droppedTooltip.requestedLink, equippedTooltip.requestedLink = nil, nil
+    equippedTooltip.snapshot, equippedTooltip.slot, equippedTooltip.canSwitchSlot = nil, nil, nil
 end)
 
 local inspectionMessages = {
@@ -1150,6 +1153,63 @@ local function PlayerListPosition()
     return "auto"
 end
 
+local function PlaceEquippedAroundPawn(anchor, card, roster)
+    local view = ns.LiveView
+    local obstacles = view.VisiblePawnRects()
+    if #obstacles == 0 then return false end
+    local prompts = view.VisiblePromptRects()
+    local screenWidth, screenHeight = UIParent:GetWidth(), UIParent:GetHeight()
+    local width, height = equippedTooltip:GetWidth(), equippedTooltip:GetHeight()
+    local coordinate = view.ScreenCoordinate
+    local right, top = coordinate(anchor, "GetRight"), coordinate(anchor, "GetTop")
+    if not (finite(screenWidth) and finite(screenHeight) and finite(width) and finite(height)
+        and width > 0 and height > 0 and finite(right) and finite(top)) then return false end
+
+    local gap = 7
+    local rightTop = math.max(height + gap, math.min(top, screenHeight - gap))
+    local function Try(x, y)
+        if x < gap or x + width > screenWidth - gap or y > screenHeight - gap or y - height < gap then return false end
+        local rect = {left = x, right = x + width, bottom = y - height, top = y}
+        if view.RectOverlaps(rect, obstacles) or view.RectOverlaps(rect, prompts) then return false end
+        equippedTooltip:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", x, y)
+        return true
+    end
+    if Try(right + gap, rightTop) then return true end
+
+    local left, bottom, highest = coordinate(anchor, "GetLeft"), coordinate(anchor, "GetBottom"), top
+    local function Extend(frame)
+        if not frame or not frame:IsShown() then return end
+        local x, low, high = coordinate(frame, "GetLeft"), coordinate(frame, "GetBottom"), coordinate(frame, "GetTop")
+        if finite(x) then left = left and math.min(left, x) or x end
+        if finite(low) then bottom = bottom and math.min(bottom, low) or low end
+        if finite(high) then highest = math.max(highest, high) end
+    end
+    Extend(card and card.anchor)
+    Extend(card)
+    Extend(roster)
+    if left and Try(left - gap - width, rightTop) then return true end
+    local x = math.max(gap, math.min(right + gap, screenWidth - width - gap))
+    if bottom and Try(x, bottom - gap) then return true end
+    if Try(x, highest + gap + height) then return true end
+
+    local beyond = right + gap
+    for _, obstacle in ipairs(obstacles) do
+        if obstacle.top > rightTop - height and obstacle.bottom < rightTop then
+            beyond = math.max(beyond, obstacle.right + gap)
+        end
+    end
+    if Try(beyond, rightTop) then return true end
+    for _, rectangles in ipairs({obstacles, prompts}) do
+        for _, rect in ipairs(rectangles) do
+            if x < rect.right and rect.left < x + width then
+                highest = math.max(highest, rect.top)
+                bottom = bottom and math.min(bottom, rect.bottom) or rect.bottom
+            end
+        end
+    end
+    return Try(x, highest + gap + height) or (bottom and Try(x, bottom - gap))
+end
+
 local function PlaceComparison()
     if not detailAnchor or not details:IsShown() then return end
     if liveComparison then
@@ -1159,6 +1219,7 @@ local function PlaceComparison()
         local screenWidth, width = UIParent:GetWidth(), equippedTooltip:GetWidth()
         local height = equippedTooltip:GetHeight()
         equippedTooltip:ClearAllPoints()
+        if not liveComparison.demo and PlaceEquippedAroundPawn(detailAnchor, liveComparison.card, liveComparison.roster) then return end
         if finite(right) and finite(screenWidth) and finite(width) and right + width + 7 > screenWidth
             and finite(bottom) and finite(height) and bottom >= height + 14 then
             equippedTooltip:SetPoint("TOPRIGHT", UIParent, "BOTTOMRIGHT", -7, bottom - 7)
@@ -1222,24 +1283,47 @@ local function ComparisonParticipant(entry, name)
     return found == true, class
 end
 
-local function DrawEquipped(snapshot, status, state)
+local function DrawEquipped(snapshot, status, state, historical)
     local links = snapshot and snapshot.links
-    local equipped = links and (links[1] or links[2])
+    local empty = snapshot and snapshot.empty
+    local firstKnown = (links and links[1]) or (empty and empty[1])
+    local secondKnown = (links and links[2]) or (empty and empty[2])
+    if equippedTooltip.snapshot ~= snapshot then
+        equippedTooltip.snapshot = snapshot
+        if links and not links[1] and links[2] then
+            equippedTooltip.slot = 2
+        else
+            equippedTooltip.slot = not firstKnown and secondKnown and 2 or 1
+        end
+    end
+    local slot = equippedTooltip.slot or 1
+    equippedTooltip.canSwitchSlot = firstKnown and secondKnown and snapshot.count == 2
+    local equipped = links and links[slot]
     local equippedStatus = status
     if equipped then
         equippedStatus = nil
-        if snapshot.atDrop or state ~= "ready" then
-            equippedStatus = snapshot.atDrop and Label("Inspected during the roll", "Осмотрено во время розыгрыша")
-                or Label("Last inspected gear", "Экипировка при последнем осмотре")
+        if snapshot.atDrop or historical or state ~= "ready" then
+            if snapshot.atDrop then
+                equippedStatus = Label("Inspected near the roll", "Осмотрено около времени розыгрыша")
+            elseif state == "ready" then
+                equippedStatus = Label("Equipped now", "Надето сейчас")
+            else
+                equippedStatus = Label("Last inspected gear", "Экипировка при последнем осмотре")
+            end
             local at = snapshot.at
             if type(at) == "number" and at > 0 and at < math.huge then
                 local ok, timestamp = pcall(date, L.dateFmt .. " %H:%M", at)
                 if ok and timestamp then equippedStatus = equippedStatus .. " · " .. timestamp end
             end
         end
+    elseif empty and empty[slot] then
+        equippedStatus = Label("Equipment slot is empty", "Слот экипировки пуст")
     elseif not equippedStatus then
-        local empty = snapshot and snapshot.empty and snapshot.empty[1] and (snapshot.count == 1 or snapshot.empty[2])
-        equippedStatus = empty and Label("Equipment slot is empty", "Слот экипировки пуст") or inspectionMessages.noData
+        equippedStatus = inspectionMessages.noData
+    end
+    if equippedTooltip.canSwitchSlot then
+        local changeSlot = Label("Slot %d/2 · Click to switch", "Слот %d/2 · Нажми, чтобы сменить"):format(slot)
+        equippedStatus = equippedStatus and (equippedStatus .. "\n" .. changeSlot) or changeSlot
     end
     ShowComparisonTooltip(equippedTooltip, equipped, equippedStatus)
 end
@@ -1256,14 +1340,19 @@ local function SaveInspection(entry, name, class, expectedGUID, snapshot, inspec
     local matches = unique and actualClass == class and currentGUID ~= false
         and (not expectedGUID or currentGUID == expectedGUID)
         and (not snapshot or not currentGUID or inspectedGUID == currentGUID)
-    if snapshot and matches and HasRoll(entry) then
-        local existing = SavedInspection(entry, name, class, currentGUID)
-        if not existing or not existing.atDrop then
-            entry.inspections = entry.inspections or {}
-            snapshot.class, snapshot.atDrop = class, atDrop
-            snapshot.guid = atDrop and inspectedGUID or nil
-            inspectedGUIDs[snapshot] = inspectedGUID
-            entry.inspections[name] = snapshot
+    if snapshot and matches then
+        snapshot.class, snapshot.atDrop = class, atDrop
+        snapshot.guid = atDrop and inspectedGUID or nil
+        inspectedGUIDs[snapshot] = inspectedGUID
+        if HasRoll(entry) then
+            local existing = SavedInspection(entry, name, class, currentGUID)
+            if not existing or not existing.atDrop then
+                entry.inspections = entry.inspections or {}
+                entry.inspections[name] = snapshot
+            end
+        elseif snapshot.guid then
+            local replacement = inspectionReplacements[entry]
+            if replacement and HasRoll(replacement) then StageInspectionTransfer(replacement, name, snapshot) end
         end
     end
     return matches
@@ -1299,9 +1388,15 @@ local function DrawComparison()
         end
     end
     ShowComparisonTooltip(droppedTooltip, detailEntry.link, nil, detailDisenchant)
-    DrawEquipped(snapshot, status, inspectionState)
+    DrawEquipped(snapshot, status, inspectionState, true)
     PlaceComparison()
 end
+
+equippedTooltip:SetScript("OnMouseUp", function(self, button)
+    if button ~= "LeftButton" or not self.canSwitchSlot then return end
+    self.slot = 3 - self.slot
+    DrawComparison()
+end)
 
 local function ComparePlayer(name, class)
     if not detailEntry or not name then return end
@@ -1355,8 +1450,24 @@ toggleDetails = function(entry, fromMain, owner)
     end
 end
 
+local function LiveComparisonCard(comparison)
+    local card = ns.LiveView:FindCard(comparison.id, comparison.link)
+    if not card or not card.entry.canInspect or card.entry.demo ~= comparison.demo then return end
+    local entry = card.entry
+    if entry.allPassed then return end
+    local matches = 0
+    for _, player in ipairs(entry.winner and {entry.winner} or entry.players) do
+        if player.name == comparison.name and (not comparison.guid or player.guid == comparison.guid) then
+            if player.class ~= comparison.class or player.guid ~= comparison.guid then return end
+            matches = matches + 1
+        end
+    end
+    if matches == 1 then return card end
+end
+
 local function InspectLivePlayer(comparison, player, retries)
     if liveComparison ~= comparison then return end
+    if not LiveComparisonCard(comparison) then details:Hide() return end
     if player.guid == false then
         comparison.state = "unavailable"
         DrawComparison()
@@ -1364,6 +1475,7 @@ local function InspectLivePlayer(comparison, player, retries)
     end
     local state = inspector:Request(comparison.link, player.name, player.class, function(result, snapshot)
         if liveComparison ~= comparison then return end
+        if not LiveComparisonCard(comparison) then details:Hide() return end
         comparison.state, comparison.snapshot = result, snapshot
         DrawComparison()
     end, player.guid)
@@ -1382,11 +1494,11 @@ ns.LiveView.OnPlayerClick = function(card, entry, player, owner)
     local previous = liveComparison
     details:Hide()
     if previous and previous.id == entry.id and previous.link == entry.link
-        and previous.name == player.name and previous.guid == player.guid then return end
+        and previous.name == player.name and previous.guid == player.guid and previous.class == player.class then return end
 
     local panel = owner.livePanel
-    local comparison = { id = entry.id, link = entry.link, name = player.name, guid = player.guid, demo = entry.demo,
-        roster = panel ~= card and panel or nil }
+    local comparison = { id = entry.id, link = entry.link, name = player.name, guid = player.guid, class = player.class, demo = entry.demo,
+        card = card, roster = panel ~= card and panel or nil }
     liveComparison = comparison
     detailAnchor = ns.LiveView:EquippedAnchor(card, comparison.roster)
     details:Show()
@@ -1530,6 +1642,19 @@ local function LiveItemHasSlot(link)
     return hasSlot
 end
 
+local function RefreshLiveComparisonAnchor()
+    if not liveComparison then return end
+    local card = LiveComparisonCard(liveComparison)
+    if not card then details:Hide() return end
+    liveComparison.card = card
+    detailAnchor = ns.LiveView:EquippedAnchor(card, liveComparison.roster)
+    QueueComparisonPlacement()
+end
+ns.LiveView.OnPlacementChanged = RefreshLiveComparisonAnchor
+ns.LiveView.KeepRosterOpen = function(roster, focus)
+    return liveComparison and liveComparison.roster == roster and focus == equippedTooltip
+end
+
 RenderLiveRolls = function()
     local rolls = ns.LiveSource:GetRolls()
     if #rolls > 0 then liveDemo = nil end
@@ -1555,15 +1680,7 @@ RenderLiveRolls = function()
     else
         ns.LiveView:Hide()
     end
-    if liveComparison then
-        local card = ns.LiveView:FindCard(liveComparison.id, liveComparison.link)
-        if card and card.entry.canInspect and card.entry.demo == liveComparison.demo then
-            detailAnchor = ns.LiveView:EquippedAnchor(card, liveComparison.roster)
-            QueueComparisonPlacement()
-        else
-            details:Hide()
-        end
-    end
+    RefreshLiveComparisonAnchor()
 end
 
 local function AdvanceLiveDemo(demo)
@@ -1780,8 +1897,9 @@ do
             local job = table.remove(jobs, 1)
             local entry, name, class = job.entry, job.name, job.class
             local unique, currentClass = ComparisonParticipant(entry, name)
+            local saved = SavedInspection(entry, name, class, job.guid)
             if worldReady and GetTime() < job.expires and HasRoll(entry) and unique and currentClass == class
-                and capture:GetParticipantGUID(entry, name) == job.guid then
+                and capture:GetParticipantGUID(entry, name) == job.guid and not (saved and saved.atDrop) then
                 local hasSlot, pending = ns.HasInspectSlot(entry.link)
                 if pending then
                     RequestItemData(entry.link)
@@ -1804,19 +1922,41 @@ do
         if entry.legacy or entry.ambiguous or entry.stale or time() - entry.t > 180 then return end
         local tried = seen[entry] or {}
         seen[entry] = tried
-        local function Add(name, class)
-            if not name or not class or #jobs >= 40 then return end
+        local function Add(name, class, phase)
+            if not name or not class then return end
             local guid = capture:GetParticipantGUID(entry, name)
             local unique, currentClass = ComparisonParticipant(entry, name)
             local saved = SavedInspection(entry, name, class, guid)
-            if not unique or currentClass ~= class or guid == false or tried[name] == (guid or class)
-                or (saved and saved.atDrop) then return end
-            tried[name] = guid or class
-            jobs[#jobs + 1] = { entry = entry, name = name, class = class, guid = guid, expires = GetTime() + 20 }
+            if not unique or currentClass ~= class or guid == false or (saved and saved.atDrop) then return end
+            local previous = tried[name]
+            local identity = guid or class
+            if not previous or previous.identity ~= identity then
+                previous = {identity = identity}
+                tried[name] = previous
+            end
+            if previous[phase] then return end
+            if phase == "winner" then
+                local queuedNeed, lastNeed
+                for index, job in ipairs(jobs) do
+                    if job.phase == "need" then
+                        lastNeed = index
+                        if job.entry == entry and job.name == name and job.guid == guid then queuedNeed = index end
+                    end
+                end
+                local replaceIndex = queuedNeed or (#jobs >= 40 and lastNeed)
+                if replaceIndex then table.remove(jobs, replaceIndex) end
+            end
+            if #jobs >= 40 then return end
+            previous[phase] = true
+            local job = { entry = entry, name = name, class = class, guid = guid, phase = phase, expires = GetTime() + 20 }
+            if phase == "winner" then table.insert(jobs, 1, job) else jobs[#jobs + 1] = job end
         end
-        if entry.done then Add(entry.winner, entry.winnerClass) end
-        for _, roll in ipairs(entry.rolls) do
-            if roll.type == "need" then Add(roll.name, roll.class) end
+        if entry.done then
+            Add(entry.winner, entry.winnerClass, "winner")
+        else
+            for _, roll in ipairs(entry.rolls) do
+                if roll.type == "need" then Add(roll.name, roll.class, "need") end
+            end
         end
         Schedule()
     end
@@ -1825,6 +1965,42 @@ do
         wipe(jobs)
         wipe(seen)
         timer = nil
+    end
+end
+
+local pendingInspectionTransfers = setmetatable({}, {__mode = "k"})
+local function TransferConfirmedInspections(entry)
+    local candidates = pendingInspectionTransfers[entry]
+    if not candidates then return end
+    for name, snapshot in pairs(candidates) do
+        local guid = capture:GetParticipantGUID(entry, name)
+        if type(guid) == "string" then
+            local unique, class = ComparisonParticipant(entry, name)
+            if guid == snapshot.guid and unique and class == snapshot.class then
+                local existing = SavedInspection(entry, name, class, guid)
+                if not existing or not existing.atDrop or (snapshot.at and existing.at and snapshot.at < existing.at) then
+                    entry.inspections = entry.inspections or {}
+                    entry.inspections[name] = snapshot
+                end
+            end
+            if guid ~= snapshot.guid or (unique and class) then candidates[name] = nil end
+        end
+    end
+    if not next(candidates) then pendingInspectionTransfers[entry] = nil end
+end
+
+StageInspectionTransfer = function(entry, name, snapshot)
+    if not snapshot.atDrop or not snapshot.guid then return end
+    local pending = pendingInspectionTransfers[entry]
+    local candidates = pending or {}
+    local previous = candidates[name]
+    if not previous or (snapshot.at and previous.at and snapshot.at < previous.at) then candidates[name] = snapshot end
+    pendingInspectionTransfers[entry] = candidates
+    TransferConfirmedInspections(entry)
+    if not pending and pendingInspectionTransfers[entry] then
+        C_Timer.After(180, function()
+            if pendingInspectionTransfers[entry] == candidates then pendingInspectionTransfers[entry] = nil end
+        end)
     end
 end
 
@@ -1852,17 +2028,24 @@ local function RecordDrop(entry, isNew, baseline)
     else
         activeEntries[entry] = nil
     end
+    TransferConfirmedInspections(entry)
     if worldReady and not baseline then QueueDropInspections(entry) end
     if newDay then queueRefresh() else queueRefresh(key) end
 end
 
-local function RemoveDrop(entry)
+local function RemoveDrop(entry, replacement)
     activeEntries[entry] = nil
     local key = DayKey(entry.t)
     local list = days[key]
     if not list then return end
     for i, candidate in ipairs(list) do
         if candidate == entry then
+            if replacement and not replacement.ambiguous then
+                inspectionReplacements[entry] = replacement
+                for name, snapshot in pairs(entry.inspections or {}) do
+                    StageInspectionTransfer(replacement, name, snapshot)
+                end
+            end
             table.remove(list, i)
             if #list == 0 then
                 days[key] = nil

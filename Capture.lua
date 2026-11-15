@@ -13,6 +13,7 @@ ns.CaptureEvents = {
 
 local isSecret = _G.issecretvalue or function() return false end
 local START_TOLERANCE = 2
+local LATE_CHAT_GRACE = 2
 
 local function clean(value, expectedType)
     if isSecret(value) or type(value) ~= expectedType then return nil end
@@ -403,14 +404,15 @@ function ns.NewCapture(callbacks)
         local entry = slot.entry
         if not entry.done and not entry.closed then
             entry.closed = true
+            slot.closedAt = time()
             callbacks.onDrop(entry, false)
         end
     end
 
-    local function suppressChatSlot(slot)
+    local function suppressChatSlot(slot, replacement)
         removeChatSlot(slot)
         if callbacks.onRemove then
-            callbacks.onRemove(slot.entry)
+            callbacks.onRemove(slot.entry, replacement)
         else
             local entry = slot.entry
             entry.rolls = {}
@@ -420,8 +422,7 @@ function ns.NewCapture(callbacks)
         end
     end
 
-    local function markAmbiguous(slot, competingPopup)
-        if competingPopup then slot.competingPopup = true end
+    local function markAmbiguous(slot)
         local entry = slot.entry
         if entry.ambiguous then return end
         entry.ambiguous = true
@@ -495,7 +496,32 @@ function ns.NewCapture(callbacks)
         return nativeSlot.startedAt and math.abs(nativeSlot.startedAt - observedAt) <= START_TOLERANCE
     end
 
-    local function blockChatForNative(identity, nativeSlot)
+    local function uniqueNativeStart(nativeSlot, historyStart, observedAt, encounterDrops)
+        local entry = nativeSlot.entry
+        local identity, encounterID = nativeSlot.identity, entry.encounterID
+        local nativeStart = historyStart or nativeSlot.startTime + (observedAt - nativeSlot.startedAt)
+        for other in pairs(nativeActive[identity] or {}) do
+            if other ~= nativeSlot and not other.covered and sameStart(other, nativeStart, observedAt) then return false end
+        end
+        local rows = encounterDrops or clean(read(api.GetSortedDropsForEncounter, encounterID), "table")
+        if not rows then return false end
+        for _, raw in pairs(rows) do
+            if not clean(raw, "table") then return false end
+            local _, otherIdentity = itemLink(raw.itemHyperlink)
+            if not otherIdentity then return false end
+            if otherIdentity == identity then
+                local key, startTime = id(raw.lootListKey), clean(raw.startTime, "number")
+                if not key or not startTime then return false end
+                if key ~= entry.lootListKey and math.abs(startTime - nativeStart) <= START_TOLERANCE then
+                    local other = seen[encounterID] and seen[encounterID][key]
+                    if not other or other.startTime ~= startTime or not other.covered then return false end
+                end
+            end
+        end
+        return true
+    end
+
+    local function blockChatForNative(identity, nativeSlot, encounterDrops)
         local slots = chatByLink[identity]
         if not slots then return end
         local candidate, multiple
@@ -507,11 +533,14 @@ function ns.NewCapture(callbacks)
         end
         if multiple then
             for _, slot in pairs(slots) do
-                if sameStart(nativeSlot, slot.historyStart, slot.entry.t) then markAmbiguous(slot, true) end
+                if not slot.entry.done and sameStart(nativeSlot, slot.historyStart, slot.entry.t) then
+                    markAmbiguous(slot)
+                end
             end
-        elseif candidate and not candidate.competingPopup and not nativeSlot.covered then
+        elseif candidate and not nativeSlot.covered
+            and uniqueNativeStart(nativeSlot, candidate.historyStart, candidate.entry.t, encounterDrops) then
             coverRoll(candidate.id, nativeSlot, math.max(2, candidate.expires - time()))
-            suppressChatSlot(candidate)
+            suppressChatSlot(candidate, nativeSlot.entry)
         end
         if nativeActive[identity] then
             local otherSlots = chatByLink[identity]
@@ -550,7 +579,7 @@ function ns.NewCapture(callbacks)
                 nativeMatch = nativeSlot
             end
         end
-        if nativeMatch and not multiple then
+        if nativeMatch and not multiple and uniqueNativeStart(nativeMatch, historyStart, observedAt) then
             coverRoll(rollID, nativeMatch, lifetime)
             return
         end
@@ -563,8 +592,7 @@ function ns.NewCapture(callbacks)
         for _, other in pairs(group) do
             if not other.entry.done and not other.entry.closed and observedAt <= other.expires then
                 entry.ambiguous = true
-                slot.competingPopup = true
-                markAmbiguous(other, true)
+                markAmbiguous(other)
             end
         end
         group[rollID], chatByID[rollID] = slot, slot
@@ -576,22 +604,45 @@ function ns.NewCapture(callbacks)
         end)
     end
 
+    local function findChatRoll(entry, name)
+        for _, roll in ipairs(entry.rolls) do
+            if roll.name == name then return roll end
+        end
+    end
+
+    local function supportsChatWinner(roll, parsed)
+        return roll and roll.type ~= "pass"
+            and (not parsed.winnerType or roll.type == parsed.winnerType)
+            and (not parsed.value or not roll.value or roll.value == parsed.value)
+    end
+
     local function handleLootChat(message)
         local parsed = parseChat(chatRules, message)
         if not parsed then return end
         local slots = chatByLink[parsed.identity]
         if not slots then return end
-        local target
+        local target, closedTarget, multipleClosed, recentlyClosed
         local observedAt = time()
         for _, slot in pairs(slots) do
             if observedAt <= slot.expires and not slot.entry.done then
-                -- An overlapping identical item leaves later chat lines ambiguous
-                -- too, even if one of its roll popups has already closed.
-                if target or slot.entry.ambiguous then return end
-                target = slot
+                if slot.entry.closed then
+                    multipleClosed = multipleClosed or closedTarget ~= nil
+                    closedTarget = slot
+                    if slot.closedAt and observedAt >= slot.closedAt and observedAt - slot.closedAt <= LATE_CHAT_GRACE then
+                        recentlyClosed = recentlyClosed or {}
+                        recentlyClosed[#recentlyClosed + 1] = slot.entry
+                    end
+                else
+                    if target or slot.entry.ambiguous then return end
+                    target = slot
+                end
             end
         end
-        if not target then return end
+        -- A lone closed popup can still receive a late result. It must not
+        -- shadow a newer live popup for the same item.
+        if not target then recentlyClosed = nil end
+        target = target or (not multipleClosed and closedTarget)
+        if not target or target.entry.ambiguous then return end
         local entry = target.entry
         local getActiveRollIDs = _G.GetActiveLootRollIDs
         if type(getActiveRollIDs) == "function" then
@@ -604,27 +655,30 @@ function ns.NewCapture(callbacks)
                     local _, identity = itemLink(read(_G.GetLootRollItemLink, rollID))
                     if not identity then return end
                     if identity == parsed.identity then
-                        markAmbiguous(target, true)
+                        markAmbiguous(target)
                         return
                     end
                 end
             end
         end
         if parsed.kind == "allpassed" then
+            if recentlyClosed then return end
             entry.done, entry.allpassed, entry.closed = true, true, nil
         elseif not parsed.player then
             return
         else
             local class, level, fullName = groupMember(parsed.player)
             parsed.player = fullName or parsed.player
-            local roll
-            for _, candidate in ipairs(entry.rolls) do
-                if candidate.name == parsed.player then
-                    roll = candidate
-                    break
-                end
-            end
+            local roll = findChatRoll(entry, parsed.player)
             if parsed.kind == "won" then
+                if recentlyClosed then
+                    -- A result near cancellation needs evidence from the new
+                    -- roll that cannot also describe a recently closed roll.
+                    if not supportsChatWinner(roll, parsed) then return end
+                    for _, predecessor in ipairs(recentlyClosed) do
+                        if supportsChatWinner(findChatRoll(predecessor, parsed.player), parsed) then return end
+                    end
+                end
                 entry.done, entry.closed = true, nil
                 entry.winner = parsed.player
                 entry.winnerClass = roll and roll.class or class
@@ -668,7 +722,7 @@ function ns.NewCapture(callbacks)
         return info and nonempty(info.encounterName)
     end
 
-    local function snapshotDrop(encounterID, lootListKey, raw, sourceName, baseline)
+    local function snapshotDrop(encounterID, lootListKey, raw, sourceName, baseline, encounterDrops)
         if not clean(raw, "table") then return end
         local link, identity = itemLink(raw.itemHyperlink)
         local startTime = clean(raw.startTime, "number")
@@ -702,20 +756,20 @@ function ns.NewCapture(callbacks)
         local previous = slot.entry
         local isNew = previous == nil
         local entry = previous
-        local knownStartedAt
-        if isNew then
-            local observedAt = time()
+        local observedAt = time()
+        if not slot.startedAt then
             local historyTime = clean(read(api.GetLootHistoryTime), "number")
-            local t = observedAt
             if historyTime and historyTime >= startTime then
                 local candidate = observedAt - math.floor(historyTime - startTime)
-                if candidate > 0 then t, knownStartedAt = candidate, candidate end
+                if candidate > 0 then slot.startedAt = candidate end
             end
+        end
+        if isNew then
             entry = {
                 encounterID = encounterID,
                 lootListKey = lootListKey,
                 link = link,
-                t = t,
+                t = slot.startedAt or observedAt,
                 rolls = {},
                 capture = "history",
             }
@@ -735,11 +789,8 @@ function ns.NewCapture(callbacks)
         if not presentationWinner and not winnerInfo and not allpassed and entry.winner then
             presentationWinner = ns.FindWinningLootRoll(raw.rollInfos, entry.winner, slot.winnerGUID, entry.winnerClass)
         end
+        local wasActive = slot.expiry ~= nil
         local changed = observeNativeActivity(slot, raw, winnerInfo ~= nil or winningRoll ~= nil or allpassed) or isNew
-        if knownStartedAt then slot.startedAt = knownStartedAt end
-        if fallbackAvailable and not baseline and (knownStartedAt or slot.expiry) then
-            blockChatForNative(identity, slot)
-        end
         if sourceName and sourceName ~= entry.sourceName then
             entry.sourceName = sourceName
             changed = true
@@ -813,6 +864,9 @@ function ns.NewCapture(callbacks)
         end
         local bindingsChanged = not sameBindings(participantGUIDs[entry], bindings)
         participantGUIDs[entry] = bindings
+        if fallbackAvailable and not baseline and (isNew or wasActive or slot.expiry) then
+            blockChatForNative(identity, slot, encounterDrops)
+        end
         if changed or bindingsChanged then callbacks.onDrop(entry, isNew, baseline) end
     end
 
@@ -823,7 +877,7 @@ function ns.NewCapture(callbacks)
         for _, raw in ipairs(drops) do
             local drop = clean(raw, "table")
             local lootListKey = drop and id(drop.lootListKey)
-            if lootListKey then snapshotDrop(encounterID, lootListKey, drop, sourceName, baseline) end
+            if lootListKey then snapshotDrop(encounterID, lootListKey, drop, sourceName, baseline, drops) end
         end
     end
 

@@ -9,7 +9,10 @@ local PADDING, GAP, WIDTH, MIN_WIDTH = 5, 5, 205, 174
 local DETAIL_HEADER = 24
 local isSecret = issecretvalue or function() return false end
 local cards, demoAnchors = {}, {}
+local layoutObstacles = {}
 local details
+local geometryWatch = CreateFrame("Frame", "LootRollsPlusLiveGeometry", UIParent)
+geometryWatch:Hide()
 
 local label, tint = display.Label, display.Tint
 local shortChoices = {
@@ -166,6 +169,8 @@ local function finite(value)
 end
 
 local function scalePosition(frame, method)
+    if isSecret(frame) or (type(frame) ~= "table" and type(frame) ~= "userdata")
+        or type(frame[method]) ~= "function" or type(frame.GetEffectiveScale) ~= "function" then return end
     local value = frame[method](frame)
     local scale, parentScale = frame:GetEffectiveScale(), UIParent:GetEffectiveScale()
     if not finite(value) or not finite(scale) or scale <= 0 or not finite(parentScale) or parentScale <= 0 then return end
@@ -174,10 +179,94 @@ local function scalePosition(frame, method)
 end
 view.ScreenCoordinate = scalePosition
 
-local function fitCard(card, anchor, entry, raid)
+local function frameRect(frame)
+    local left, right = scalePosition(frame, "GetLeft"), scalePosition(frame, "GetRight")
+    local bottom, top = scalePosition(frame, "GetBottom"), scalePosition(frame, "GetTop")
+    if left and right and left < right and bottom and top and bottom < top then
+        return { left = left, right = right, bottom = bottom, top = top }
+    end
+end
+
+function view.VisiblePawnRects()
+    local rectangles = {}
+    local function addVisible(frame)
+        if isSecret(frame) or (type(frame) ~= "table" and type(frame) ~= "userdata")
+            or type(frame.IsVisible) ~= "function" then return end
+        local visible = frame:IsVisible()
+        if isSecret(visible) or visible ~= true then return end
+        local bounds = frameRect(frame)
+        if bounds then rectangles[#rectangles + 1] = bounds end
+        return true
+    end
+    for i = 1, 4 do
+        local advisor = _G["PawnUI_LootUpgradeAdvisor" .. i]
+        if addVisible(advisor) then addVisible(advisor.arrow) end
+    end
+    return rectangles
+end
+
+function view.VisiblePromptRects()
+    local rectangles = {}
+    for _, entry in ipairs(geometryWatch.entries or {}) do
+        local anchor = entry.anchor
+        if anchor and anchor:IsVisible() then
+            local box = frameRect(anchor)
+            if box then rectangles[#rectangles + 1] = box end
+        end
+    end
+    return rectangles
+end
+
+local function overlaps(rect, obstacle)
+    return rect.left < obstacle.right and obstacle.left < rect.right
+        and rect.bottom < obstacle.top and obstacle.bottom < rect.top
+end
+
+function view.RectOverlaps(rect, obstacles)
+    for _, obstacle in ipairs(obstacles) do
+        if overlaps(rect, obstacle) then return true end
+    end
+    return false
+end
+
+local function rectAt(left, bottom, width, height)
+    return { left = left, right = left + width, bottom = bottom, top = bottom + height }
+end
+
+local function sideRect(left, anchor, width, height, screenHeight)
+    if not anchor or not finite(screenHeight) or screenHeight < height then return end
+    local bottom = (anchor.top + anchor.bottom - height) / 2
+    return rectAt(left, math.max(0, math.min(bottom, screenHeight - height)), width, height)
+end
+
+local function verticalRect(anchor, width, height, screenWidth, screenHeight)
+    if not finite(screenHeight) or screenHeight < height + 2 * GAP then return end
+    local left = math.max(GAP, math.min(anchor.left, screenWidth - width - GAP))
+    local function find(above)
+        local start = above and anchor.top + GAP or anchor.bottom - height - GAP
+        local bottom = start
+        while bottom >= GAP and bottom + height <= screenHeight - GAP do
+            local rect = rectAt(left, bottom, width, height)
+            local previous = bottom
+            for _, obstacle in ipairs(layoutObstacles) do
+                if overlaps(rect, obstacle) then
+                    bottom = above and math.max(bottom, obstacle.top + GAP)
+                        or math.min(bottom, obstacle.bottom - height - GAP)
+                end
+            end
+            if bottom == previous then return rect, math.abs(bottom - start) end
+        end
+    end
+    local above, aboveGap = find(true)
+    local below, belowGap = find(false)
+    if not below or (above and aboveGap <= belowGap) then return above end
+    return below
+end
+
+local function fitCard(card, anchor, entry, raid, height, pawnRects)
     local left = scalePosition(anchor, "GetLeft")
     local right = scalePosition(anchor, "GetRight")
-    local screenWidth = UIParent:GetWidth()
+    local screenWidth, screenHeight = UIParent:GetWidth(), UIParent:GetHeight()
     if not left or not right or left >= right or not finite(screenWidth) or screenWidth <= 0 then return false end
     local preferred, minimum = WIDTH, MIN_WIDTH
     if not raid and #entry.players <= PARTY_ROWS then
@@ -191,22 +280,44 @@ local function fitCard(card, anchor, entry, raid)
         end
         preferred = math.min(182, math.max(minimum, math.ceil(names + choices + 36)))
     end
-    local rightSpace = screenWidth - right - 2 * GAP
-    local leftSpace = left - 2 * GAP
-    local onRight = leftSpace < minimum
-    local width = math.floor(math.min(preferred, onRight and rightSpace or leftSpace))
-    if width < minimum then return false end
-    if card.anchor ~= anchor or card.onRight ~= onRight or card:GetWidth() ~= width then
-        card.onRight = onRight
+    local anchorRect = frameRect(anchor)
+    local rightWidth = math.floor(math.min(preferred, screenWidth - right - 2 * GAP))
+    local leftWidth = math.floor(math.min(preferred, left - 2 * GAP))
+    local placement, width, bounds
+    if leftWidth >= minimum then
+        placement, width = "left", leftWidth
+        bounds = sideRect(left - GAP - width, anchorRect, width, height, screenHeight)
+    elseif rightWidth >= minimum then
+        local candidate = sideRect(right + GAP, anchorRect, rightWidth, height, screenHeight)
+        if #pawnRects == 0 or (candidate and not view.RectOverlaps(candidate, pawnRects)) then
+            placement, width, bounds = "right", rightWidth, candidate
+        end
+    end
+    if not placement and anchorRect then
+        width = math.floor(math.min(preferred, screenWidth - 2 * GAP))
+        if width >= minimum then
+            bounds = verticalRect(anchorRect, width, height, screenWidth, screenHeight)
+            if bounds then placement = "vertical" end
+        end
+    end
+    if not placement then return false end
+    if bounds then layoutObstacles[#layoutObstacles + 1] = bounds end
+    if card.anchor ~= anchor or card.placement ~= placement or card:GetWidth() ~= width
+        or (placement == "vertical" and (card.bounds.left ~= bounds.left or card.bounds.bottom ~= bounds.bottom)) then
+        card.placement = placement
+        card.onRight = placement == "right"
         card.anchor = anchor
         card:SetWidth(width)
         card:ClearAllPoints()
-        if onRight then
+        if placement == "vertical" then
+            card:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", bounds.left, bounds.bottom)
+        elseif card.onRight then
             card:SetPoint("LEFT", anchor, "RIGHT", GAP, 0)
         else
             card:SetPoint("RIGHT", anchor, "LEFT", -GAP, 0)
         end
     end
+    card.bounds = bounds
     return true
 end
 
@@ -224,7 +335,7 @@ end
 
 local function hideCard(card)
     card:Hide()
-    card.entry, card.anchor = nil, nil
+    card.entry, card.anchor, card.bounds = nil, nil, nil
 end
 
 local function drawDetailsRows(frame)
@@ -237,7 +348,7 @@ local function closeOnOutsideClick(frame, _, button)
     local toggle = frame.card and frame.card.toggle
     for _, focus in ipairs(GetMouseFoci()) do
         while focus do
-            if focus == frame or focus == toggle then return end
+            if focus == frame or focus == toggle or (view.KeepRosterOpen and view.KeepRosterOpen(frame, focus)) then return end
             focus = focus:GetParent()
         end
     end
@@ -311,7 +422,20 @@ local function positionDetails(frame, card)
     local popupLeft = card.onRight and scalePosition(card.anchor, "GetLeft")
     frame:ClearAllPoints()
     local width = frame:GetWidth()
-    if card.onRight and right and screenWidth - right >= width + 2 * GAP then
+    local cardRect = card.placement == "vertical" and card.bounds or frameRect(card) or card.bounds
+    local pawnRects = not card.entry.demo and view.VisiblePawnRects() or {}
+    local screenHeight, height = UIParent:GetHeight(), frame:GetHeight()
+    local rightRect = cardRect and finite(screenHeight) and height <= screenHeight
+        and rectAt(cardRect.right + GAP, math.max(0, math.min(cardRect.top - height, screenHeight - height)), width, height)
+    local rightClear = #pawnRects == 0 or (rightRect and not view.RectOverlaps(rightRect, pawnRects))
+    if card.placement == "vertical" and cardRect then
+        local bounds = verticalRect(cardRect, width, height, screenWidth, screenHeight)
+        if bounds then
+            frame:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", bounds.left, bounds.bottom)
+            return
+        end
+    end
+    if card.onRight and right and screenWidth - right >= width + 2 * GAP and rightClear then
         frame:SetPoint("TOPLEFT", card, "TOPRIGHT", GAP, 0)
     elseif not card.onRight and left and left >= width + 2 * GAP then
         frame:SetPoint("TOPRIGHT", card, "TOPLEFT", -GAP, 0)
@@ -321,11 +445,10 @@ local function positionDetails(frame, card)
         -- Keep the disclosure clear of the native buttons when both horizontal options are full.
         local below = scalePosition(card, "GetBottom")
         local top = scalePosition(card, "GetTop")
-        local screenHeight = UIParent:GetHeight()
         if not finite(screenHeight) or screenHeight <= 0 then screenHeight = nil end
         local above = top and screenHeight and screenHeight - top
         local cardBottom = below
-        local height = frame:GetHeight() + GAP
+        height = height + GAP
         local lowest, highest = card, card
         for _, neighbor in pairs(cards) do
             if neighbor ~= card and neighbor:IsShown() and neighbor.onRight == card.onRight then
@@ -444,8 +567,7 @@ local function fitCounts(card, entry)
     return text
 end
 
-local function drawCard(card, entry, raid)
-    card.entry = entry
+local function cardPresentation(entry, raid)
     local winner = not entry.ambiguous and entry.winner
     local status
     if entry.ambiguous then
@@ -460,6 +582,14 @@ local function drawCard(card, entry, raid)
 
     local party = not status and not raid and #entry.players <= PARTY_ROWS
     local canExpand = not status and not party
+    local height = party and (#entry.players * ROW_HEIGHT + 2 * PADDING) or 2 * PADDING + ROW_HEIGHT
+    if canExpand or winner then height = 2 * PADDING + 2 * ROW_HEIGHT end
+    return { winner = winner, status = status, party = party, canExpand = canExpand, height = height }
+end
+
+local function drawCard(card, entry, presentation)
+    card.entry = entry
+    local winner, status, party, canExpand = presentation.winner, presentation.status, presentation.party, presentation.canExpand
     card.summary:SetShown(not party)
     card.summary:SetText(status or (canExpand and fitCounts(card, entry)) or "")
     card.toggle:SetShown(canExpand)
@@ -482,9 +612,7 @@ local function drawCard(card, entry, raid)
     end
     drawRows(card.rows, party and entry.players or noPlayers, 0, 0, card:GetWidth(), card, true)
     drawRows(card.winnerRows, winner and { winner } or noPlayers, 0, 0, card:GetWidth(), card, true)
-    local height = party and (#entry.players * ROW_HEIGHT + 2 * PADDING) or 2 * PADDING + ROW_HEIGHT
-    if canExpand or winner then height = 2 * PADDING + 2 * ROW_HEIGHT end
-    card:SetHeight(height)
+    card:SetHeight(presentation.height)
     card:Show()
     return canExpand
 end
@@ -527,16 +655,29 @@ local function demoAnchor(index, entry)
     return anchor
 end
 
-function view:Render(entries, raid, demo)
-    local expanded
+local function render(entries, raid, demo, pawnRects)
+    local anchors = {}
+    layoutObstacles = {}
+    for _, obstacle in ipairs(pawnRects) do layoutObstacles[#layoutObstacles + 1] = obstacle end
     for i, entry in ipairs(entries) do
         local anchor = demo and demoAnchor(i, entry) or entry.anchor
-        local card = cards[i]
         if anchor and anchor:IsVisible() then
+            anchors[i] = anchor
+            local bounds = frameRect(anchor)
+            if bounds then layoutObstacles[#layoutObstacles + 1] = bounds end
+        end
+    end
+
+    local expanded
+    for i, entry in ipairs(entries) do
+        local anchor = anchors[i]
+        local card = cards[i]
+        if anchor then
             card = card or newCard(i)
             cards[i] = card
-            if fitCard(card, anchor, entry, raid) then
-                local canExpand = drawCard(card, entry, raid)
+            local presentation = cardPresentation(entry, raid)
+            if fitCard(card, anchor, entry, raid, presentation.height, pawnRects) then
+                local canExpand = drawCard(card, entry, presentation)
                 if canExpand and isExpanded(entry) then expanded = card end
             else
                 hideCard(card)
@@ -555,6 +696,38 @@ function view:Render(entries, raid, demo)
         hideDetails()
     end
 end
+
+function view:Render(entries, raid, demo)
+    local watch = not demo and #entries > 0
+    if watch and not geometryWatch:IsShown() then geometryWatch.elapsed = 0 end
+    geometryWatch.entries = watch and entries or nil
+    geometryWatch.raid = watch and raid or nil
+    geometryWatch:SetShown(watch)
+    local pawnRects = watch and view.VisiblePawnRects() or {}
+    geometryWatch.pawnRects = pawnRects
+    render(entries, raid, demo, pawnRects)
+end
+
+local function sameRectangles(before, after)
+    if #before ~= #after then return false end
+    for i, a in ipairs(before) do
+        local b = after[i]
+        if a.left ~= b.left or a.right ~= b.right or a.bottom ~= b.bottom or a.top ~= b.top then return false end
+    end
+    return true
+end
+
+geometryWatch:SetScript("OnUpdate", function(self, elapsed)
+    if not self.entries or not finite(elapsed) or elapsed < 0 then return end
+    self.elapsed = self.elapsed + elapsed
+    if self.elapsed < 0.2 then return end
+    self.elapsed = 0
+    local pawnRects = view.VisiblePawnRects()
+    if sameRectangles(self.pawnRects, pawnRects) then return end
+    self.pawnRects = pawnRects
+    render(self.entries, self.raid, false, pawnRects)
+    if view.OnPlacementChanged then view.OnPlacementChanged() end
+end)
 
 function view:Hide()
     self:Render({}, false, false)

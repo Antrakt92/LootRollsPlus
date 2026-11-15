@@ -10,19 +10,21 @@ local otherLink = "|cff0070dd|Hitem:43:0|h[Other]|h|r"
 local row = {}
 local notices = {}
 local removed = {}
+local replacements = {}
 local oldEntry
 local function new()
-    row, notices, removed = {}, {}, {}
+    row, notices, removed, replacements = {}, {}, {}, {}
     return ns.NewCapture({
         onDrop = function(drop, isNew)
             if isNew then row[#row + 1] = drop end
             notices[#notices + 1] = { entry = drop, new = isNew }
         end,
-        onRemove = function(drop)
+        onRemove = function(drop, replacement)
             for i, entry in ipairs(row) do
                 if entry == drop then table.remove(row, i) break end
             end
             removed[#removed + 1] = drop
+            replacements[drop] = replacement and { entry = replacement, winnerValue = replacement.winnerValue }
         end,
         getExisting = function(e, k, t, value)
             if oldEntry and e == oldEntry.encounterID and k == oldEntry.lootListKey
@@ -503,6 +505,117 @@ emitDrop(engine, 32)
 emitDrop(engine, 33)
 assert(#row == 2 and row[1].winnerValue == 42 and row[2].winnerValue == 69,
     "each identical drop retains its own native result")
+
+setDrops()
+engine = new()
+engine:Start()
+local firstStart = clock
+start(75)
+advance(4)
+local secondStart = clock
+start(76)
+assert(row[1].ambiguous and row[2].ambiguous, "chat alone cannot disambiguate the overlapping item")
+local firstChat, secondChat = row[1], row[2]
+setDrops(drop(34, firstStart, { quickWinner }, quickWinner), drop(35, secondStart, { quickWinner }, quickWinner))
+emitDrop(engine, 34)
+emitDrop(engine, 35)
+assert(#row == 2 and #removed == 2 and replacements[firstChat].entry == row[1]
+    and replacements[secondChat].entry == row[2] and replacements[firstChat].winnerValue == 42,
+    "distinct starts can reconcile both provisional rows with populated native results")
+
+setDrops()
+engine = new()
+engine:Start()
+start(77)
+setDrops(drop(36, clock, { quickWinner }, quickWinner), drop(37, clock, { quickWinner }, quickWinner))
+emitDrop(engine, 36)
+emitDrop(engine, 37)
+assert(#removed == 0, "a provisional row cannot be linked arbitrarily to either of two simultaneous native drops")
+
+setDrops()
+engine = new()
+engine:Start()
+start(81)
+setDrops(drop(38, clock, { quickWinner }, quickWinner), drop(39, secret))
+emitDrop(engine, 38)
+assert(#removed == 0, "a hidden start time cannot rule out a competing native drop")
+
+setDrops()
+engine = new()
+engine:Start()
+local resolvedStart = clock
+start(82)
+chat("You won " .. link)
+advance(1)
+start(83)
+setDrops(drop(40, resolvedStart, { quickWinner }, quickWinner))
+emitDrop(engine, 40)
+assert(row[1].done and not row[1].ambiguous,
+    "uncertain native attribution must not erase a completed chat winner")
+
+setDrops()
+engine = new()
+engine:Start()
+start(78)
+engine:HandleEvent("CANCEL_LOOT_ROLL", 78)
+advance(3)
+start(79)
+chat("You need " .. link)
+chat("You won " .. link)
+assert(row[1].closed and not row[1].done and row[2].done and row[2].winnerType == "need",
+    "a closed popup must not shadow a new roll for the same item")
+
+setDrops()
+engine = new()
+engine:Start()
+start(80)
+engine:HandleEvent("CANCEL_LOOT_ROLL", 80)
+chat("You won " .. link)
+assert(row[1].done and not row[1].closed, "a lone closed popup can still receive its late winner message")
+
+setDrops()
+engine = new()
+engine:Start()
+start(84)
+chat("You need " .. link)
+engine:HandleEvent("CANCEL_LOOT_ROLL", 84)
+advance(1)
+start(85)
+chat("You won " .. link)
+assert(not row[2].done, "a late unkeyed winner must not complete the new popup")
+advance(2)
+chat("You need " .. link)
+chat("You won " .. link)
+assert(row[2].done and row[2].winnerType == "need", "the old popup stops blocking results after a short grace")
+
+setDrops()
+engine = new()
+engine:Start()
+start(86)
+chat(link .. " greed by Priest")
+engine:HandleEvent("CANCEL_LOOT_ROLL", 86)
+advance(1)
+start(87)
+chat("You need " .. link)
+chat("You won " .. link)
+assert(row[2].done and row[2].winnerType == "need", "a new vote with distinct ownership can settle during the grace")
+
+setDrops()
+engine = new()
+engine:Start()
+local cleanClock = C_LootHistory.GetLootHistoryTime
+C_LootHistory.GetLootHistoryTime = function() return secret end
+start(88)
+local clockRecovery = drop(41, clock)
+setDrops(clockRecovery)
+emitDrop(engine, 41)
+assert(#row == 2 and #removed == 0, "a restricted clock cannot prove that two rows represent the same drop")
+advance(1)
+C_LootHistory.GetLootHistoryTime = cleanClock
+clockRecovery.winner = quickWinner
+emitDrop(engine, 41)
+assert(#row == 1 and #removed == 1 and row[1].winnerValue == 42,
+    "the native winner can reconcile the provisional row once the clock recovers")
 
 setDrops()
 engine = new()

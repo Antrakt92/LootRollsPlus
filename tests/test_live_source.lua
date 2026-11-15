@@ -421,4 +421,31 @@ emit("LOOT_HISTORY_UPDATE_DROP", 77, 18)
 advance()
 assert(#expect(source, 701).rolls == 1)
 
+reset()
+source = newSource()
+local delayedStart = clock
+advance(4)
+popup(901, 1, link, delayedStart)
+drops[77] = { drop(24, delayedStart, link, {need}) }
+emit("START_LOOT_ROLL", 901, 56000)
+emit("LOOT_HISTORY_UPDATE_DROP", 77, 24)
+advance()
+assert(#expect(source, 901).rolls == 1, "a delayed START must use the popup timer to bind the correct native drop")
+
+reset()
+source = newSource()
+delayedStart = clock
+advance(4)
+popup(902, 1, link, delayedStart)
+drops[77] = { drop(25, delayedStart, link, {need}), drop(26, clock, link, {offspec}) }
+local readTimeLeft = GetLootRollTimeLeft
+GetLootRollTimeLeft = function() return secret end
+emit("START_LOOT_ROLL", 902, 60000)
+emit("LOOT_HISTORY_UPDATE_DROP", 77, 26)
+advance()
+assert(#expect(source, 902).rolls == 0, "delivery-time fallback must not bind votes from another same-item drop")
+GetLootRollTimeLeft = readTimeLeft
+advance()
+assert(expect(source, 902).rolls[1].name == "Mage", "a readable timer must bind the actual earlier drop")
+
 print("Live source timing, attribution, privacy, and lifecycle tests passed")

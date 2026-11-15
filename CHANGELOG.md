@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.0 — 15-Nov-2026 — Equipment slots and roll tracking
+
+- Click the equipped item tooltip to switch between two matching slots when both are known.
+- Preserve saved equipment when the game confirms a roll. Label gear inspected now and retry the winner when an earlier Need inspection could not finish.
+- Keep live votes and equipment attached to the right roll and player when events arrive late, rolls are canceled, or identical items drop together.
+- Move live roll panels and equipment tooltips away from Pawn and nearby loot prompts when space allows. Use vertical space when neither side can fit the roll panel.
+
 ## 1.1.2 — 15-Nov-2026 — Loot roll panel placement
 
 - Place live roll panels to the left of the loot prompt when there is room, leaving space for Pawn’s comparison on the right.

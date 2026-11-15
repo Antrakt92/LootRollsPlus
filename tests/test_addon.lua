@@ -695,7 +695,7 @@ assert(not rightCard.excludedLines)
 assert(leftCard.doubleLines[2][1] == "Auction" and leftCard.doubleLines[2][2] == "7500c")
 assert(leftCard.doubleLines[3][1] == "Disenchant" and leftCard.doubleLines[3][2] == "~14s 97c")
 assert(#rightCard.doubleLines == 0)
-assert(not rightCard.footer, "fresh equipment should not be labelled as cached")
+contains(rightCard.footer, "Equipped now")
 assert(leftCard.lastPoint[1] == "BOTTOMRIGHT" and rightCard.lastPoint[1] == "BOTTOMLEFT")
 assert(leftCard.lastPoint[2] == frame and rightCard.lastPoint[2] == frame)
 assert(rightCard.lastPoint[4] - leftCard.lastPoint[4] == 8 and leftCard.lastPoint[5] == rightCard.lastPoint[5])
@@ -764,6 +764,22 @@ comparisonRow.entry.inspections.Self = {class = "PALADIN", count = 2, links = {[
 fire("PLAYER_ENTERING_WORLD", false, false)
 assert(leftCard.tooltipLink == cloth and rightCard.tooltipLink == cachedOffHand)
 assert(not rightCard.value, "an available item must replace the unavailable message")
+comparisonRow.entry.inspections.Self = {class = "PALADIN", count = 2, links = {equipped, cachedOffHand}}
+fire("PLAYER_ENTERING_WORLD", false, false)
+assert(rightCard.tooltipLink == equipped)
+contains(rightCard.footer, "1/2")
+mouseDown("LeftButton", rightCard)
+rightCard:GetScript("OnMouseUp")(rightCard, "LeftButton")
+assert(leftCard.tooltipLink == cloth and rightCard.tooltipLink == cachedOffHand)
+contains(rightCard.footer, "2/2")
+fire("PLAYER_ENTERING_WORLD", false, false)
+assert(rightCard.tooltipLink == cachedOffHand, "refreshing the same comparison must retain the selected slot")
+comparisonRow.entry.inspections.Self = {class = "PALADIN", count = 2, links = {[2] = cachedOffHand}, empty = {true}}
+fire("PLAYER_ENTERING_WORLD", false, false)
+assert(rightCard.tooltipLink == cachedOffHand, "a populated second slot should be the default over an empty first slot")
+rightCard:GetScript("OnMouseUp")(rightCard, "LeftButton")
+contains(rightCard.value, "Equipment slot is empty")
+contains(rightCard.value, "1/2")
 comparisonRow.entry.inspections.Self = savedEquipment
 fire("PLAYER_ENTERING_WORLD", false, false)
 assert(rightCard.tooltipLink == equipped)
@@ -1381,6 +1397,54 @@ flushTimers()
 assert(inspectedUnit == "party1", "the current selection should retry after the throttle")
 fire("INSPECT_READY", "Player-Mage")
 assert(liveGear.tooltipLink == memberItem)
+nativeLootFrame.mockLeft, nativeLootFrame.mockRight = 350, 627
+nativeLootFrame.mockBottom, nativeLootFrame.mockTop = 400, 500
+live.mockLeft, live.mockRight, live.mockBottom, live.mockTop = 180, 345, 395, 505
+tickLiveSource()
+flushTimers()
+local pawnAdvisor = CreateFrame("Frame", "PawnUI_LootUpgradeAdvisor1")
+pawnAdvisor.mockLeft, pawnAdvisor.mockRight = 640, 900
+pawnAdvisor.mockBottom, pawnAdvisor.mockTop = 425, 550
+local geometry = LootRollsPlusLiveGeometry
+geometry:GetScript("OnUpdate")(geometry, 0.2)
+flushTimers()
+local gearX, gearY = liveGear.lastPoint[4], liveGear.lastPoint[5]
+assert(liveGear.lastPoint[2] == UIParent and liveGear.lastPoint[3] == "BOTTOMLEFT")
+assert(not latestNS.LiveView.RectOverlaps({left = gearX, right = gearX + liveGear:GetWidth(),
+    top = gearY, bottom = gearY - liveGear:GetHeight()}, latestNS.LiveView.VisiblePawnRects()),
+    "the already-open equipment must move away when Pawn appears")
+UIParent:SetSize(1000, 800)
+liveGear:SetSize(390, 150)
+local secondPrompt = newWidget("Frame", UIParent)
+secondPrompt.mockLeft, secondPrompt.mockRight = 350, 627
+secondPrompt.mockBottom, secondPrompt.mockTop = 260, 380
+local firstRoll, secondRoll = live.entry, {}
+for k, v in pairs(firstRoll) do secondRoll[k] = v end
+secondRoll.id, secondRoll.anchor = firstRoll.id + 1, secondPrompt
+latestNS.LiveView:Render({firstRoll, secondRoll}, false, false)
+latestNS.LiveView.OnPlacementChanged()
+flushTimers()
+gearX, gearY = liveGear.lastPoint[4], liveGear.lastPoint[5]
+assert(liveGear.lastPoint[3] == "BOTTOMLEFT" and not latestNS.LiveView.RectOverlaps({left = gearX,
+    right = gearX + liveGear:GetWidth(), top = gearY, bottom = gearY - liveGear:GetHeight()},
+    latestNS.LiveView.VisiblePromptRects()), "Pawn fallback must leave a second loot prompt clickable")
+UIParent:SetSize(1400, 900)
+liveGear:SetSize(200, 150)
+latestNS.LiveView:Render({firstRoll}, false, false)
+pawnAdvisor:Hide()
+geometry:GetScript("OnUpdate")(geometry, 0.2)
+flushTimers()
+assert(liveGear.lastPoint[2] == nativeLootFrame and liveGear.lastPoint[3] == "TOPRIGHT")
+nativeLootFrame.mockLeft, nativeLootFrame.mockRight = 40, 317
+nativeLootFrame.mockBottom, nativeLootFrame.mockTop = nil, nil
+live.mockLeft, live.mockRight, live.mockBottom, live.mockTop = nil, nil, nil, nil
+liveVotes[1].playerGUID = "Player-Replacement"
+fire("LOOT_HISTORY_UPDATE_DROP", 20, lootKey)
+tickLiveSource()
+assert(not liveGear:IsVisible(), "equipment must close when the selected participant's GUID changes")
+liveVotes[1].playerGUID = "Player-Mage"
+fire("LOOT_HISTORY_UPDATE_DROP", 20, lootKey)
+tickLiveSource()
 mouseDown("LeftButton", UIParent)
 liveVotes[2].state = 4
 fire("LOOT_HISTORY_UPDATE_DROP", 20, lootKey)
@@ -1426,6 +1490,8 @@ contains(liveDetails.rows[2].result.value, "common-radiobutton-dot")
 liveDetails.rows[2]:GetScript("OnClick")(liveDetails.rows[2])
 assert(not liveDrop:IsVisible() and liveGear:IsVisible(), "the expanded row should show only equipped gear")
 assert(liveGear.lastPoint[2] == liveDetails and liveGear.lastPoint[3] == "TOPRIGHT")
+mouseDown("LeftButton", liveGear)
+assert(liveDetails:IsVisible() and liveGear:IsVisible(), "clicking the equipment must keep its raid roster open")
 mouseDown("LeftButton", UIParent)
 assert(not liveGear:IsVisible())
 
@@ -1473,6 +1539,12 @@ contains(auditResult.value, "100")
 contains(auditResult.value, "common-radiobutton-dot")
 assert(auditResult:GetUnboundedStringWidthForText(auditResult.value) <= auditResult:GetWidth(),
     "narrow result must fit")
+UIParent:SetSize(420, 800)
+auditAnchor.mockLeft, auditAnchor.mockRight = 110, 315
+auditAnchor.mockBottom, auditAnchor.mockTop = 360, 415
+auditView:Render({auditEntry(shield)}, false, false)
+assert(auditCard:IsVisible() and auditCard.lastPoint[2] == UIParent and auditCard.lastPoint[3] == "BOTTOMLEFT",
+    "a compact roll panel should use vertical space when neither side can fit")
 auditAnchor.mockScale = math.huge
 auditView:Render({auditEntry(shield)}, false, false)
 assert(not auditCard:IsVisible(), "nonfinite geometry cannot be used as an anchor")
@@ -1534,6 +1606,91 @@ do
     row:GetScript("OnClick")(row)
     local card = LootRollsPlusEquippedTooltip
     assert(card.tooltipLink == memberItem and not inspectedUnit)
-    contains(card.footer, "Inspected during the roll")
+    contains(card.footer, "Inspected near the roll")
+end
+do
+    LootRollsPlusCharDB.days = {}
+    C_LootHistory.GetSortedDropsForEncounter = function() return {} end
+    function GetNumGroupMembers() return 2 end
+    loadAddon(true)
+    local key = 1003
+    wallTime, historyTime = wallTime + 1, historyTime + 1
+    local mage = {playerName = "Other Mage", playerClass = "MAGE", playerGUID = "Player-Mage", state = 0}
+    drops[key] = {lootListKey = key, itemHyperlink = cloth, startTime = historyTime, rollInfos = {mage}}
+    local combat = true
+    function InCombatLockdown() return combat end
+    inspectedUnit = nil
+    fire("LOOT_HISTORY_UPDATE_DROP", 20, key)
+    for _ = 1, 41 do
+        timerNow = timerNow + 0.5
+        flushTimers()
+    end
+    assert(not inspectedUnit)
+    combat = false
+    mage.roll, mage.isWinner = 96, true
+    drops[key].winner = mage
+    fire("LOOT_HISTORY_UPDATE_DROP", 20, key)
+    timerNow = timerNow + 0.5
+    flushTimers()
+    assert(inspectedUnit == "party1", "a confirmed winner gets one attempt after the earlier Need inspection expired")
+    fire("INSPECT_READY", "Player-Mage")
+    assert(nextVisibleRow(LootRollsPlusFrame).entry.inspections["Other Mage"].links[1] == memberItem)
+end
+do
+    LootRollsPlusCharDB.days = {}
+    C_LootHistory.GetSortedDropsForEncounter = function() return {} end
+    function GetLootRollItemLink() return cloth end
+    function GetActiveLootRollIDs() return {1900} end
+    function GetNumGroupMembers() return 1 end
+    loadAddon(true)
+    local key = 1002
+    wallTime, historyTime = wallTime + 1, historyTime + 1
+    fire("START_LOOT_ROLL", 1900, 30000)
+    fire("CHAT_MSG_LOOT", "You have selected Need for: " .. cloth)
+    local provisional = nextVisibleRow(LootRollsPlusFrame).entry
+    timerNow = timerNow + 0.5
+    flushTimers()
+    local earlier = provisional.inspections and provisional.inspections.Self
+    assert(earlier and earlier.links[1] == equipped)
+    local laterItem = "|cff1eff00|Hitem:9125::::::::|h[New equipment]|h|r"
+    function GetInventoryItemLink() return laterItem end
+    local self = { playerName = "Self", playerClass = "PALADIN", playerGUID = "Player-Test", state = 0, roll = 97 }
+    drops[key] = { lootListKey = key, itemHyperlink = cloth, startTime = historyTime, rollInfos = {} }
+    fire("LOOT_HISTORY_UPDATE_DROP", 20, key)
+    local replacement = nextVisibleRow(LootRollsPlusFrame).entry
+    assert(replacement ~= provisional and not replacement.inspections,
+        "pending transfer must stay out of saved history until the native identity is known")
+    drops[key].rollInfos, drops[key].winner = {self}, self
+    fire("LOOT_HISTORY_UPDATE_DROP", 20, key)
+    timerNow = timerNow + 0.5
+    flushTimers()
+    assert(nextVisibleRow(LootRollsPlusFrame).entry == replacement and #LootRollsPlusCharDB.days[date("%Y-%m-%d", wallTime)] == 1)
+    assert(replacement.inspections and replacement.inspections.Self == earlier,
+        "the native record must keep the earlier matching equipment instead of inspecting the new item")
+end
+do
+    LootRollsPlusCharDB.days = {}
+    LOOT_ROLL_NEED = "%s need %s"
+    function GetNumGroupMembers() return 2 end
+    function GetActiveLootRollIDs() return {1901} end
+    function GetInventoryItemLink() return memberItem end
+    loadAddon(true)
+    local key = 1004
+    wallTime, historyTime = wallTime + 1, historyTime + 1
+    fire("START_LOOT_ROLL", 1901, 30000)
+    fire("CHAT_MSG_LOOT", "Other Mage need " .. cloth)
+    local provisional = nextVisibleRow(LootRollsPlusFrame).entry
+    inspectedUnit = nil
+    timerNow = timerNow + 0.5
+    flushTimers()
+    assert(inspectedUnit == "party1" and not provisional.inspections)
+    local mage = {playerName = "Other Mage", playerClass = "MAGE", playerGUID = "Player-Mage", state = 0, roll = 88}
+    drops[key] = {lootListKey = key, itemHyperlink = cloth, startTime = historyTime, rollInfos = {mage}, winner = mage}
+    fire("LOOT_HISTORY_UPDATE_DROP", 20, key)
+    local replacement = nextVisibleRow(LootRollsPlusFrame).entry
+    assert(replacement ~= provisional)
+    fire("INSPECT_READY", "Player-Mage")
+    assert(not provisional.inspections and replacement.inspections["Other Mage"].links[1] == memberItem,
+        "an in-flight inspection must finish on the verified native replacement")
 end
 print("Addon TOC, event, and UI integration tests passed")
