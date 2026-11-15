@@ -33,6 +33,8 @@
 - **History:** switch dates and browse rolls by dungeon or raid visit. Hover for participants, or click for side-by-side item tooltips.
 - **Need warnings:** red marks equipment the class cannot use. Orange marks armor below its usual tier. The game determines the winner.
 
+![Live party choices to the left of the in-game loot prompt](media/live-party-roll.png)
+
 Choices and numbers appear as the game reports them. Loot Rolls Plus tries to inspect players who choose Need and the winner while the drop is recent. History shows the saved equipment when the inspection succeeds. Auctionator and Mastercraft can add prices to the dropped item's comparison tooltip.
 
 ![History showing winning rolls, class icons and a date selector](media/history.png)
