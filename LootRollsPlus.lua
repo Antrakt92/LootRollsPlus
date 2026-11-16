@@ -16,6 +16,7 @@ local refresh, queueRefresh, toggleDetails, UpdateVisibility
 local RenderLiveRolls
 local hoverRow
 local worldReady
+local comparisonNeedsItem
 local activeEntries = {}
 local nextActiveOrder = 0
 local isSecret = issecretvalue or function() return false end
@@ -52,19 +53,19 @@ end
 ---------------------------------------------------------------------------
 local STRINGS = {
     enUS = { history = "History", clear = "Clear", rolling = "Rolling...", allPassed = "Everyone passed",
-             noRolls = "No rolls recorded", winner = "winner", undecided = "Undecided",
+             noRolls = "No rolls recorded", winner = "winner",
              confirmClear = "Clear all recorded rolls for this character? This cannot be undone.", dateFmt = "%m/%d/%Y" },
     esES = { history = "Historial", clear = "Borrar", rolling = "Tirando...", allPassed = "Todos pasaron",
-             noRolls = "Sin tiradas registradas", winner = "ganador", undecided = "Sin decidir",
+             noRolls = "Sin tiradas registradas", winner = "ganador",
              confirmClear = "¿Borrar todo el historial de Loot Rolls Plus?", dateFmt = "%d/%m/%Y" },
     deDE = { history = "Verlauf", clear = "Löschen", rolling = "Würfeln...", allPassed = "Alle haben gepasst",
-             noRolls = "Keine Würfe aufgezeichnet", winner = "Gewinner", undecided = "Unentschieden",
+             noRolls = "Keine Würfe aufgezeichnet", winner = "Gewinner",
              confirmClear = "Gesamten Loot-Rolls-Plus-Verlauf löschen?", dateFmt = "%d.%m.%Y" },
     frFR = { history = "Historique", clear = "Effacer", rolling = "Jets en cours...", allPassed = "Tout le monde a passé",
-             noRolls = "Aucun jet enregistré", winner = "gagnant", undecided = "Indécis",
+             noRolls = "Aucun jet enregistré", winner = "gagnant",
              confirmClear = "Effacer tout l'historique de Loot Rolls Plus ?", dateFmt = "%d/%m/%Y" },
     ptBR = { history = "Histórico", clear = "Limpar", rolling = "Rolando...", allPassed = "Todos passaram",
-             noRolls = "Nenhuma rolagem registrada", winner = "vencedor", undecided = "Indecisos",
+             noRolls = "Nenhuma rolagem registrada", winner = "vencedor",
              confirmClear = "Apagar todo o histórico do Loot Rolls Plus?", dateFmt = "%d/%m/%Y" },
 }
 STRINGS.esMX = STRINGS.esES
@@ -215,7 +216,8 @@ local function RequestItemData(link)
             pendingItems[link] = request
             pendingItemCount = pendingItemCount + 1
             local ok = pcall(item.ContinueOnItemLoad, item, function()
-                if pendingItems[link] == request then
+                if pendingItems[link] == request or (comparisonNeedsItem and comparisonNeedsItem(link, request)) then
+                    request.loaded = true
                     -- Keep the marker through redraw when instant metadata is still incomplete.
                     queueRefresh(nil, true)
                 end
@@ -229,6 +231,7 @@ local function RequestItemData(link)
             end
         end
     end
+    return pendingItems[link]
 end
 
 local function ClassifyGear(link, class, rollType, level)
@@ -274,11 +277,12 @@ local function ParticipantLines(e)
     local lines = {}
     for _, r in ipairs(sorted) do
         local winner = r.isWinner or (e.legacy and e.winner == r.name)
-        local classFile = r.class or (winner and e.winnerClass or nil)
+        local classFile = (winner and e.winnerClass) or r.class
         local left = display.PlayerText(r.name, classFile)
         if winner then left = left .. "  |cffffd100(" .. L.winner .. ")|r" end
         local rollType = winner and (e.winnerType or r.type) or r.type
-        local value = winner and (e.winnerValue or r.value) or r.value
+        local value = r.value
+        if winner and (e.winnerValue ~= nil or e.capture == "history") then value = e.winnerValue end
         local right = RollText(rollType, value)
         if rollType == "undecided" and IsActive(e) then right = WAITING end
         local kind = CheckGear(e, r, classFile, rollType)
@@ -437,8 +441,6 @@ local function SetResult(row, status, name, class)
     row.right:SetText(status)
 end
 
--- Blizzard movio las funciones de objetos al espacio C_Item y retiro las
--- globales antiguas; se prueban ambas para funcionar en cualquier cliente.
 local function ItemIcon(link)
     local id = tonumber(link:match("|Hitem:(%d+)"))
     if id and C_Item and C_Item.GetItemIconByID then
@@ -846,7 +848,8 @@ local function BuildEntries()
     end
 
     local rowIndex, headerIndex, offset = 0, 0, 0
-    for _, group in ipairs(groups) do
+    for groupIndex, group in ipairs(groups) do
+        if groupIndex > 1 then offset = offset + 4 end
         if group.visit or not group.imported then
             headerIndex = headerIndex + 1
             local header = visitHeaders[headerIndex]
@@ -880,7 +883,6 @@ local function BuildEntries()
             row.left:SetText(item)
             offset = offset + ROW_H
         end
-        offset = offset + 4
     end
     for index = rowIndex + 1, #histRows do
         histRows[index].entry = nil
@@ -1018,11 +1020,10 @@ local function ReadMastercraftDisenchant(owner, link)
         GameTooltip:SetOwner(owner, "ANCHOR_NONE")
         GameTooltip:SetHyperlink(link)
         _, displayed = GameTooltip:GetItem()
-        if ns.GetItemLinkIdentity(displayed) ~= identity then return end
+        if ns.GetItemLinkIdentity(displayed) ~= identity then return nil, "uncached" end
     end
 
-    -- Mastercraft 1.9.9 adds its own header and up to five lines before the
-    -- estimate. Inspect only that section of the matching stock tooltip.
+    -- Inspect only the Mastercraft section of the matching stock tooltip.
     local lastLine
     local lineCount = GameTooltip:NumLines()
     if not finite(lineCount) then return end
@@ -1046,6 +1047,7 @@ local function ReadMastercraftDisenchant(owner, link)
             end
         end
     end
+    return nil, "unpriced"
 end
 
 local function CoinPrice(copper)
@@ -1114,9 +1116,14 @@ local function ShowComparisonTooltip(tooltip, link, status, disenchant)
     tooltip:Show()
 end
 
-local detailEntry, detailDisenchant, liveComparison
+local detailEntry, detailDisenchant, detailPriceRetry, liveComparison
 local inspector = ns.NewInspect()
 local selectedPlayer, selectedClass, inspectionState
+comparisonNeedsItem = function(link, request)
+    return details:IsShown() and (detailPriceRetry == request
+        or droppedTooltip.requestedLink == link or equippedTooltip.requestedLink == link
+        or (inspectionState == "itemPending" and detailEntry and detailEntry.link == link))
+end
 local inspectedGUIDs = setmetatable({}, { __mode = "k" })
 local inspectionReplacements = setmetatable({}, {__mode = "k"})
 local StageInspectionTransfer
@@ -1126,7 +1133,7 @@ end)
 details:SetScript("OnHide", function(self)
     self:UnregisterEvent("GLOBAL_MOUSE_DOWN")
     detailEntry, selectedPlayer, selectedClass, inspectionState = nil, nil, nil, nil
-    detailDisenchant = nil
+    detailDisenchant, detailPriceRetry = nil, nil
     liveComparison = nil
     droppedTooltip:Hide()
     equippedTooltip:Hide()
@@ -1153,30 +1160,43 @@ local function PlayerListPosition()
     return "auto"
 end
 
-local function PlaceEquippedAroundPawn(anchor, card, roster)
+local function PlaceLiveEquipped(anchor, card, roster)
     local view = ns.LiveView
     local obstacles = view.VisiblePawnRects()
+    local pawnVisible = #obstacles > 0
+    for _, prompt in ipairs(view.VisiblePromptRects()) do obstacles[#obstacles + 1] = prompt end
     if #obstacles == 0 then return false end
-    local prompts = view.VisiblePromptRects()
     local screenWidth, screenHeight = UIParent:GetWidth(), UIParent:GetHeight()
     local width, height = equippedTooltip:GetWidth(), equippedTooltip:GetHeight()
     local coordinate = view.ScreenCoordinate
     local right, top = coordinate(anchor, "GetRight"), coordinate(anchor, "GetTop")
     if not (finite(screenWidth) and finite(screenHeight) and finite(width) and finite(height)
-        and width > 0 and height > 0 and finite(right) and finite(top)) then return false end
+        and width > 0 and height > 0 and width <= screenWidth and height <= screenHeight
+        and finite(right) and finite(top)) then return false end
 
     local gap = 7
     local rightTop = math.max(height + gap, math.min(top, screenHeight - gap))
+    local bottom = coordinate(anchor, "GetBottom")
+    local function Rect(x, y)
+        return {left = x, right = x + width, bottom = y - height, top = y}
+    end
+    if not pawnVisible then
+        local x = math.max(0, math.min(right + gap, screenWidth - width))
+        local y = math.max(height, math.min(top, screenHeight))
+        if right + gap + width > screenWidth and bottom and bottom >= height + 2 * gap then
+            x, y = screenWidth - width - gap, bottom - gap
+        end
+        if not view.RectOverlaps(Rect(x, y), obstacles) then return false end
+    end
     local function Try(x, y)
         if x < gap or x + width > screenWidth - gap or y > screenHeight - gap or y - height < gap then return false end
-        local rect = {left = x, right = x + width, bottom = y - height, top = y}
-        if view.RectOverlaps(rect, obstacles) or view.RectOverlaps(rect, prompts) then return false end
+        if view.RectOverlaps(Rect(x, y), obstacles) then return false end
         equippedTooltip:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", x, y)
         return true
     end
     if Try(right + gap, rightTop) then return true end
 
-    local left, bottom, highest = coordinate(anchor, "GetLeft"), coordinate(anchor, "GetBottom"), top
+    local left, highest = coordinate(anchor, "GetLeft"), top
     local function Extend(frame)
         if not frame or not frame:IsShown() then return end
         local x, low, high = coordinate(frame, "GetLeft"), coordinate(frame, "GetBottom"), coordinate(frame, "GetTop")
@@ -1199,12 +1219,10 @@ local function PlaceEquippedAroundPawn(anchor, card, roster)
         end
     end
     if Try(beyond, rightTop) then return true end
-    for _, rectangles in ipairs({obstacles, prompts}) do
-        for _, rect in ipairs(rectangles) do
-            if x < rect.right and rect.left < x + width then
-                highest = math.max(highest, rect.top)
-                bottom = bottom and math.min(bottom, rect.bottom) or rect.bottom
-            end
+    for _, rect in ipairs(obstacles) do
+        if x < rect.right and rect.left < x + width then
+            highest = math.max(highest, rect.top)
+            bottom = bottom and math.min(bottom, rect.bottom) or rect.bottom
         end
     end
     return Try(x, highest + gap + height) or (bottom and Try(x, bottom - gap))
@@ -1219,7 +1237,7 @@ local function PlaceComparison()
         local screenWidth, width = UIParent:GetWidth(), equippedTooltip:GetWidth()
         local height = equippedTooltip:GetHeight()
         equippedTooltip:ClearAllPoints()
-        if not liveComparison.demo and PlaceEquippedAroundPawn(detailAnchor, liveComparison.card, liveComparison.roster) then return end
+        if not liveComparison.demo and PlaceLiveEquipped(detailAnchor, liveComparison.card, liveComparison.roster) then return end
         if finite(right) and finite(screenWidth) and finite(width) and right + width + 7 > screenWidth
             and finite(bottom) and finite(height) and bottom >= height + 14 then
             equippedTooltip:SetPoint("TOPRIGHT", UIParent, "BOTTOMRIGHT", -7, bottom - 7)
@@ -1334,6 +1352,29 @@ local function SavedInspection(entry, name, class, guid)
         and (not guid or guid == (inspectedGUIDs[snapshot] or snapshot.guid)) then return snapshot end
 end
 
+local function SnapshotSlot(snapshot, slot)
+    local link = snapshot.links and snapshot.links[slot]
+    if link then return link end
+    if snapshot.empty and snapshot.empty[slot] then return false end
+end
+
+local function CompleteDropInspection(snapshot)
+    return snapshot and snapshot.atDrop
+        and (snapshot.count ~= 2 or (SnapshotSlot(snapshot, 1) ~= nil and SnapshotSlot(snapshot, 2) ~= nil))
+end
+
+local function CompletesDropInspection(previous, current)
+    if CompleteDropInspection(previous) or not CompleteDropInspection(current) or current.count ~= previous.count then
+        return false
+    end
+    -- Keep the earlier observation if the player changed any known slot.
+    for slot = 1, previous.count do
+        local before = SnapshotSlot(previous, slot)
+        if before ~= nil and before ~= SnapshotSlot(current, slot) then return false end
+    end
+    return true
+end
+
 local function SaveInspection(entry, name, class, expectedGUID, snapshot, inspectedGUID, atDrop)
     local unique, actualClass = ComparisonParticipant(entry, name)
     local currentGUID = capture:GetParticipantGUID(entry, name)
@@ -1346,7 +1387,7 @@ local function SaveInspection(entry, name, class, expectedGUID, snapshot, inspec
         inspectedGUIDs[snapshot] = inspectedGUID
         if HasRoll(entry) then
             local existing = SavedInspection(entry, name, class, currentGUID)
-            if not existing or not existing.atDrop then
+            if not existing or not existing.atDrop or CompletesDropInspection(existing, snapshot) then
                 entry.inspections = entry.inspections or {}
                 entry.inspections[name] = snapshot
             end
@@ -1387,10 +1428,22 @@ local function DrawComparison()
             status = inspectionMessages[class == "ambiguous" and "ambiguous" or "unavailable"]
         end
     end
+    if type(detailPriceRetry) == "table" and detailPriceRetry.loaded and not GameTooltip:IsShown() then
+        detailPriceRetry = nil
+        detailDisenchant = ReadMastercraftDisenchant(details, detailEntry.link)
+        ReleaseTooltip(details)
+    end
     ShowComparisonTooltip(droppedTooltip, detailEntry.link, nil, detailDisenchant)
+    if detailPriceRetry == "unpriced" then
+        detailPriceRetry = droppedTooltip.requestedLink and pendingItems[droppedTooltip.requestedLink] or nil
+    end
     DrawEquipped(snapshot, status, inspectionState, true)
     PlaceComparison()
 end
+
+GameTooltip:HookScript("OnHide", function()
+    if type(detailPriceRetry) == "table" and detailPriceRetry.loaded then queueRefresh() end
+end)
 
 equippedTooltip:SetScript("OnMouseUp", function(self, button)
     if button ~= "LeftButton" or not self.canSwitchSlot then return end
@@ -1441,7 +1494,10 @@ toggleDetails = function(entry, fromMain, owner)
         if liveComparison then details:Hide() end
         detailAnchor = anchor
         detailEntry, selectedPlayer, selectedClass, inspectionState = entry, nil, nil, nil
-        detailDisenchant = ReadMastercraftDisenchant(owner, entry.link)
+        local priceState
+        detailDisenchant, priceState = ReadMastercraftDisenchant(owner, entry.link)
+        detailPriceRetry = priceState
+        if priceState == "uncached" then detailPriceRetry = RequestItemData(entry.link) end
         ReleaseTooltip(owner)
         details:Show()
         if hoverRow then ReleaseTooltip(hoverRow) end
@@ -1898,8 +1954,8 @@ do
             local entry, name, class = job.entry, job.name, job.class
             local unique, currentClass = ComparisonParticipant(entry, name)
             local saved = SavedInspection(entry, name, class, job.guid)
-            if worldReady and GetTime() < job.expires and HasRoll(entry) and unique and currentClass == class
-                and capture:GetParticipantGUID(entry, name) == job.guid and not (saved and saved.atDrop) then
+            if worldReady and not entry.closed and GetTime() < job.expires and HasRoll(entry) and unique and currentClass == class
+                and capture:GetParticipantGUID(entry, name) == job.guid and not CompleteDropInspection(saved) then
                 local hasSlot, pending = ns.HasInspectSlot(entry.link)
                 if pending then
                     RequestItemData(entry.link)
@@ -1919,7 +1975,7 @@ do
     end
 
     QueueDropInspections = function(entry)
-        if entry.legacy or entry.ambiguous or entry.stale or time() - entry.t > 180 then return end
+        if entry.legacy or entry.ambiguous or entry.stale or entry.closed or time() - entry.t > 180 then return end
         local tried = seen[entry] or {}
         seen[entry] = tried
         local function Add(name, class, phase)
@@ -1927,7 +1983,8 @@ do
             local guid = capture:GetParticipantGUID(entry, name)
             local unique, currentClass = ComparisonParticipant(entry, name)
             local saved = SavedInspection(entry, name, class, guid)
-            if not unique or currentClass ~= class or guid == false or (saved and saved.atDrop) then return end
+            if not unique or currentClass ~= class or guid == false
+                or (saved and saved.atDrop and (phase ~= "winner" or CompleteDropInspection(saved))) then return end
             local previous = tried[name]
             local identity = guid or class
             if not previous or previous.identity ~= identity then
@@ -2066,12 +2123,12 @@ local function FindSavedDrop(encounterID, lootListKey, startTime, link)
         local list = days[dayKeys[i]]
         for j = #list, 1, -1 do
             local entry = list[j]
-            if not entry.done and not entry.closed and entry.capture == "history" and entry.encounterID == encounterID
+            if not entry.done and entry.capture == "history" and entry.encounterID == encounterID
                 and entry.lootListKey == lootListKey and entry.startTime == startTime
                 and ns.GetItemLinkIdentity(entry.link) == itemIdentity
                 and math.abs(time() - entry.t) < 600 then
                 entry.stale = nil
-                RecordDrop(entry, false)
+                RecordDrop(entry, false, true)
                 return entry
             end
         end

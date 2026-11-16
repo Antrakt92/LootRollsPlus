@@ -228,7 +228,7 @@ C_Timer = {After = function(delay, fn) timers[#timers + 1] = {at = timerNow + de
 RAID_CLASS_COLORS = {PALADIN = {colorStr = "fff58cba"}, MAGE = {colorStr = "ff69ccf0"}}
 LOCALIZED_CLASS_NAMES_MALE = {PALADIN = "Paladin", MAGE = "Mage"}
 CLASS_ICON_TCOORDS = {PALADIN = {0, 0.25, 0, 0.25}, MAGE = {0.25, 0.5, 0, 0.25}}
-local tooltipOwner
+local tooltipOwner, tooltipOnHide
 function CreateAtlasMarkup(atlas, width, height, _, _, red, green, blue)
     if red then return ("|A:%s:%d:%d:0:0:%d:%d:%d|a"):format(atlas, height, width, red, green, blue) end
     return ("|A:%s:%d:%d:0:0|a"):format(atlas, height, width)
@@ -236,11 +236,19 @@ end
 GameTooltip = {
     SetOwner = function(_, owner) tooltip, tooltipOwner = {}, owner end,
     IsOwned = function(_, owner) return tooltipOwner == owner end,
+    IsShown = function() return tooltipOwner ~= nil end,
     SetHyperlink = function(_, link) tooltip[#tooltip + 1] = link end,
     AddLine = function(_, line) tooltip[#tooltip + 1] = line end,
     AddDoubleLine = function(_, left, right) tooltip[#tooltip + 1] = left .. " " .. right end,
     Show = noop,
-    Hide = function() tooltipOwner = nil end,
+    HookScript = function(_, event, hook)
+        assert(event == "OnHide")
+        tooltipOnHide = hook
+    end,
+    Hide = function()
+        tooltipOwner = nil
+        if tooltipOnHide then tooltipOnHide() end
+    end,
 }
 local cloth = "|cnIQ2:|Hitem:123::::::::|h[Cloth Robe]|h|r"
 local shield = "|cnIQ2:|Hitem:130::::::::|h[Shield]|h|r"
@@ -678,12 +686,20 @@ Item = {CreateFromItemLink = function(_, link)
     assert(link == cloth)
     return {ContinueOnItemLoad = function(_, onLoad) loadedItem = onLoad end}
 end}
+displayedMastercraftItem = "|cff1eff00|Hitem:99999::::::::|h[Previous item]|h|r"
 leftCard.failNextHyperlink = true
 comparisonRow:GetScript("OnClick")(comparisonRow)
 assert(leftCard:IsVisible() and not leftCard.tooltipLink)
 contains(leftCard.value, "Loading item")
 assert(rightCard.tooltipLink == equipped, "cold drop data should not delay the equipped item")
+displayedMastercraftItem = nil
+local foreignOwner = {}
+GameTooltip:SetOwner(foreignOwner, "ANCHOR_RIGHT")
 assert(loadedItem, "a cold tooltip must schedule an item-data retry")()
+flushTimers()
+assert(GameTooltip:IsOwned(foreignOwner), "a delayed price read must not replace another tooltip")
+assert(#leftCard.doubleLines == 2, "the comparison should redraw without interrupting the other tooltip")
+GameTooltip:Hide()
 flushTimers()
 Item = nil
 assert(leftCard:IsVisible() and leftCard.tooltipLink == cloth)
@@ -702,6 +718,23 @@ assert(rightCard.lastPoint[4] - leftCard.lastPoint[4] == 8 and leftCard.lastPoin
 assert(leftCard.lastPoint[4] >= 286, "the pair should stay on screen near the left edge")
 assert(#LootRollsPlusDetails.children == 2, "the comparison should only have two tooltip frames")
 assert(comparisonRow.entry.inspections.Self.links[1] == equipped, "opening the roll should inspect its winner")
+comparisonRow:GetScript("OnClick")(comparisonRow)
+timerNow = timerNow + 16
+flushTimers()
+mastercraftValue = "|cff5c6373no price|r"
+loadedItem = nil
+Item = {CreateFromItemLink = function()
+    return {ContinueOnItemLoad = function(_, callback) loadedItem = callback end}
+end}
+leftCard.failNextHyperlink = true
+comparisonRow:GetScript("OnClick")(comparisonRow)
+timerNow = timerNow + 16
+flushTimers()
+mastercraftValue = "~14s 97c"
+assert(loadedItem, "custom card must request cold data even when the stock tooltip has the right item")()
+flushTimers()
+assert(leftCard.doubleLines[3] and leftCard.doubleLines[3][2] == "~14s 97c",
+    "the cold card must re-read Mastercraft even when the stock tooltip recognized the item")
 comparisonRow:GetScript("OnClick")(comparisonRow)
 local itemMetadata = C_Item.GetItemInfoInstant
 C_Item.GetItemInfoInstant = function() return nil end
@@ -1435,6 +1468,17 @@ pawnAdvisor:Hide()
 geometry:GetScript("OnUpdate")(geometry, 0.2)
 flushTimers()
 assert(liveGear.lastPoint[2] == nativeLootFrame and liveGear.lastPoint[3] == "TOPRIGHT")
+secondPrompt.mockLeft, secondPrompt.mockRight = 657, 900
+secondPrompt.mockBottom, secondPrompt.mockTop = 425, 550
+latestNS.LiveView:Render({firstRoll, secondRoll}, false, false)
+latestNS.LiveView.OnPlacementChanged()
+flushTimers()
+gearX, gearY = liveGear.lastPoint[4], liveGear.lastPoint[5]
+assert(liveGear.lastPoint[2] == UIParent and liveGear.lastPoint[3] == "BOTTOMLEFT"
+    and not latestNS.LiveView.RectOverlaps({left = gearX, right = gearX + liveGear:GetWidth(),
+        top = gearY, bottom = gearY - liveGear:GetHeight()}, latestNS.LiveView.VisiblePromptRects()),
+    "equipped gear must avoid another native prompt even without Pawn")
+latestNS.LiveView:Render({firstRoll}, false, false)
 nativeLootFrame.mockLeft, nativeLootFrame.mockRight = 40, 317
 nativeLootFrame.mockBottom, nativeLootFrame.mockTop = nil, nil
 live.mockLeft, live.mockRight, live.mockBottom, live.mockTop = nil, nil, nil, nil
@@ -1550,6 +1594,80 @@ auditView:Render({auditEntry(shield)}, false, false)
 assert(not auditCard:IsVisible(), "nonfinite geometry cannot be used as an anchor")
 
 do
+    UIParent:SetSize(610, 400)
+    local firstPrompt = CreateFrame("Frame", nil, UIParent)
+    local secondPrompt = CreateFrame("Frame", nil, UIParent)
+    firstPrompt.mockLeft, firstPrompt.mockRight, firstPrompt.mockBottom, firstPrompt.mockTop = 30, 250, 115, 195
+    secondPrompt.mockLeft, secondPrompt.mockRight, secondPrompt.mockBottom, secondPrompt.mockTop = 300, 500, 185, 250
+    pawnAdvisor.mockLeft, pawnAdvisor.mockRight, pawnAdvisor.mockBottom, pawnAdvisor.mockTop = 255, 560, 110, 200
+    pawnAdvisor:Show()
+    local function entry(id, anchor)
+        return {id = id, link = cloth, anchor = anchor, canInspect = true,
+            players = {{name = "LongNameWithMore", choice = "greed", roll = 98}}}
+    end
+    auditView:Render({entry(2001, firstPrompt), entry(2002, secondPrompt)}, false, false)
+    local first, second = LootRollsPlusLiveRoll1, LootRollsPlusLiveRoll2
+    assert(first:IsVisible() and second:IsVisible())
+    assert(first.placement == "vertical" and second.placement == "vertical"
+        and not auditView.RectOverlaps(first.bounds, {second.bounds}),
+        "the second roll card must avoid an earlier card that fell back above its prompt")
+    local rollFrames = GroupLootContainer.rollFrames
+    GroupLootContainer.rollFrames = {firstPrompt, secondPrompt}
+    secondPrompt.mockLeft, secondPrompt.mockRight, secondPrompt.mockBottom, secondPrompt.mockTop = 30, 250, 215, 295
+    auditView:Render({entry(2001, firstPrompt)}, false, false)
+    local prompts = auditView.VisiblePromptRects()
+    assert(first:IsVisible() and #prompts == 2 and not auditView.RectOverlaps(first.bounds, prompts),
+        "a visible native prompt must keep its space even when its item is unreadable")
+    local oldBottom = first.bounds.bottom
+    secondPrompt:Hide()
+    local watcher = LootRollsPlusLiveGeometry
+    watcher:GetScript("OnUpdate")(watcher, 0.2)
+    assert(first:IsVisible() and first.bounds.bottom ~= oldBottom, "hiding an unreported prompt must free its space")
+    pawnAdvisor:Hide()
+    auditView:Hide()
+
+    UIParent:SetSize(1000, 600)
+    firstPrompt.mockLeft, firstPrompt.mockRight, firstPrompt.mockBottom, firstPrompt.mockTop = 600, 820, 250, 340
+    secondPrompt.mockLeft, secondPrompt.mockRight, secondPrompt.mockBottom, secondPrompt.mockTop = 150, 380, 245, 345
+    secondPrompt:Show()
+    local raidEntry = entry(2003, firstPrompt)
+    raidEntry.counts, raidEntry.leaders, raidEntry.more = {greed = 40}, {}, 0
+    for i = 1, 40 do raidEntry.players[i] = {name = "Raider " .. i, choice = "greed", roll = 100 - i} end
+    auditView:Render({raidEntry}, true, false)
+    first.mockLeft, first.mockRight, first.mockBottom, first.mockTop = 390, 595, 275, 315
+    first.toggle:GetScript("OnClick")(first.toggle)
+    local roster = LootRollsPlusLiveDetails
+    assert(roster:IsVisible() and roster.lastPoint[1] == "BOTTOMRIGHT" and roster.lastPoint[2] == first,
+        "the expanded raid list must avoid the neighboring native loot prompt")
+
+    UIParent:SetSize(1000, 280)
+    firstPrompt.mockBottom, firstPrompt.mockTop = 107, 197
+    secondPrompt.mockBottom, secondPrompt.mockTop = 0, 280
+    first.mockBottom, first.mockTop = 133, 171
+    auditView:Render({raidEntry}, true, false)
+    local shown = 0
+    for _, row in ipairs(roster.rows) do if row:IsVisible() then shown = shown + 1 end end
+    assert(roster:IsVisible() and shown > 0 and shown < 8 and roster.slider.maxValue == 40 - shown,
+        "a shorter roster must remain open and scroll through all raiders when space is tight")
+    roster.slider:SetValue(roster.slider.maxValue)
+    assert(roster.rows[shown].livePlayer == raidEntry.players[40])
+
+    UIParent:SetSize(1000, 169)
+    firstPrompt.mockBottom, firstPrompt.mockTop = 39, 129
+    secondPrompt.mockTop = 169
+    first.mockBottom, first.mockTop = 65, 103
+    auditView:Render({raidEntry}, true, false)
+    assert(roster:IsVisible() and roster.visibleRows == 1 and roster.slider.maxValue == 39)
+    assert(roster.slider.lastPoint[3] == 7 and roster.slider:GetThumbTexture():GetHeight() <= 11,
+        "the scrollbar and thumb must fit a one-row viewport")
+    roster.slider:SetValue(39)
+    assert(roster.rows[1].livePlayer == raidEntry.players[40])
+    first.mockLeft, first.mockRight, first.mockBottom, first.mockTop = nil, nil, nil, nil
+    GroupLootContainer.rollFrames = rollFrames
+    auditView:Hide()
+end
+
+do
     -- A warning on a losing vote belongs to that participant, not the winner's row.
     local record = {
         t = wallTime, link = shield, done = true, winner = "Warrior", winnerClass = "WARRIOR",
@@ -1566,6 +1684,14 @@ do
     contains(winnerRow.right.value, "Greed 92")
     winnerRow:GetScript("OnEnter")(winnerRow)
     contains(table.concat(tooltip, "\n"), "common-radiobutton-dot")
+    winnerRow:GetScript("OnLeave")(winnerRow)
+    record.capture, record.winnerType, record.winnerValue = "history", "need", nil
+    record.rolls[2].type, record.rolls[2].value = "need", 96
+    winnerRow:GetScript("OnEnter")(winnerRow)
+    local breakdown = table.concat(tooltip, "\n")
+    contains(breakdown, "(winner)")
+    assert(not breakdown:find("Need 96", 1, true),
+        "a native winner with no verified score must not borrow a conflicting participant roll")
     winnerRow:GetScript("OnLeave")(winnerRow)
 end
 do
@@ -1692,5 +1818,90 @@ do
     fire("INSPECT_READY", "Player-Mage")
     assert(not provisional.inspections and replacement.inspections["Other Mage"].links[1] == memberItem,
         "an in-flight inspection must finish on the verified native replacement")
+end
+do
+    local timestamp = wallTime
+    local entries = {}
+    for i = 1, 7 do
+        entries[i] = historyEntry(timestamp)
+        entries[i].legacy = true
+    end
+    LootRollsPlusCharDB.days = {[date("%Y-%m-%d", timestamp)] = entries}
+    LootRollsPlusDB.windowHeight = 159 -- 22px header, 18px footer, seven 17px rows.
+    loadAddon(true)
+    local _, _, itemScroll = openHistory()
+    assert(itemScroll.scrollChild:GetHeight() == itemScroll:GetHeight(), "seven rows should fit exactly")
+    assert(not itemScroll.ScrollBar:IsShown(), "History should not scroll through empty bottom space")
+end
+do
+    local when, start = wallTime - 20, historyTime - 20
+    local closed = {t = when, startTime = start, encounterID = 20, lootListKey = 39,
+        link = cloth, capture = "history", closed = true,
+        rolls = {{name = "Other Mage", class = "MAGE", type = "need", value = 94}}}
+    local finished = {playerName = "Other Mage", playerClass = "MAGE", state = 0, roll = 94}
+    local result = {lootListKey = 39, itemHyperlink = cloth, startTime = start, rollInfos = {finished}}
+    LootRollsPlusCharDB.days = {[date("%Y-%m-%d", when)] = {closed}}
+    drops[39] = result
+    C_LootHistory.GetSortedDropsForEncounter = function() return {result} end
+    loadAddon(true)
+    assert(closed.closed and not closed.done, "reload must not reopen a closed roll without a final result")
+    inspectedUnit = nil
+    timerNow = timerNow + 0.5
+    flushTimers()
+    assert(not inspectedUnit, "rebinding a closed roll must not inspect gear before confirmation")
+    result.winner = finished
+    fire("LOOT_HISTORY_UPDATE_DROP", 20, 39)
+    assert(closed.done and closed.winner == "Other Mage" and closed.winnerValue == 94,
+        "an exact closed roll should accept a confirmed native result after reload")
+    assert(#LootRollsPlusCharDB.days[date("%Y-%m-%d", when)] == 1, "the late result must update, not duplicate")
+end
+do
+    local ring = "|cnIQ2:|Hitem:2001::::::::|h[Dropped ring]|h|r"
+    local firstRing = "|cnIQ2:|Hitem:2002::::::::|h[Earlier ring]|h|r"
+    local secondRing = "|cnIQ2:|Hitem:2003::::::::|h[Second ring]|h|r"
+    local replacementRing = "|cnIQ2:|Hitem:2004::::::::|h[Changed ring]|h|r"
+    local normalInstant = C_Item.GetItemInfoInstant
+    C_Item.GetItemInfoInstant = function(link)
+        if link == ring then return 2001, "Armor", "Miscellaneous", "INVTYPE_FINGER", 84, 4, 0 end
+        return normalInstant(link)
+    end
+    function GetInventorySlotInfo(name)
+        if name == "Finger0Slot" then return 11 end
+        if name == "Finger1Slot" then return 12 end
+    end
+    local first, second
+    function GetInventoryItemLink(_, slot)
+        if slot == 11 then return first end
+        if slot == 12 then return second end
+    end
+    C_LootHistory.GetSortedDropsForEncounter = function() return {} end
+    function GetNumGroupMembers() return 2 end
+    function InCombatLockdown() return false end
+    for _, changed in ipairs({false, true}) do
+        LootRollsPlusCharDB.days = {}
+        loadAddon(true)
+        first, second = firstRing, nil
+        local key = changed and 2052 or 2051
+        local player = {playerName = "Other Mage", playerClass = "MAGE", playerGUID = "Player-Mage", state = 0}
+        wallTime, historyTime = wallTime + 1, historyTime + 1
+        drops[key] = {lootListKey = key, itemHyperlink = ring, startTime = historyTime, rollInfos = {player}}
+        fire("LOOT_HISTORY_UPDATE_DROP", 20, key)
+        timerNow = timerNow + 0.5
+        flushTimers()
+        fire("INSPECT_READY", "Player-Mage")
+        local entry = nextVisibleRow(LootRollsPlusFrame).entry
+        local snapshot = assert(entry.inspections and entry.inspections["Other Mage"])
+        assert(snapshot.atDrop and snapshot.links[1] == firstRing and not snapshot.links[2])
+        first, second = changed and replacementRing or firstRing, secondRing
+        player.roll, drops[key].winner = 96, player
+        inspectedUnit = nil
+        fire("LOOT_HISTORY_UPDATE_DROP", 20, key)
+        for _ = 1, 5 do timerNow = timerNow + 0.5; flushTimers() end
+        assert(inspectedUnit == "party1", "a winner with a partial snapshot should be inspected again")
+        fire("INSPECT_READY", "Player-Mage")
+        local saved = entry.inspections["Other Mage"]
+        assert(saved.links[1] == firstRing and saved.links[2] == (not changed and secondRing or nil),
+            "fill a partial snapshot only while the previously known equipment still agrees")
+    end
 end
 print("Addon TOC, event, and UI integration tests passed")
