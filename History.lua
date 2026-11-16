@@ -71,15 +71,26 @@ local function validTimestamp(value, dateKey)
     if ok and dayLabel(day) then return value, day end
 end
 
-local function compactRows(rows, keep)
+local function numericRowKeys(rows)
     local keys = {}
-    for key, row in pairs(rows) do
-        if positiveInteger(key) and keep(row) then keys[#keys + 1] = key end
+    for key in pairs(rows) do
+        if positiveInteger(key) then keys[#keys + 1] = key end
     end
     table.sort(keys)
-    for i, key in ipairs(keys) do rows[i] = rows[key] end
+    return keys
+end
+
+local function compactRows(rows, keep)
+    local count = 0
+    for _, key in ipairs(numericRowKeys(rows)) do
+        local row = rows[key]
+        if keep(row) then
+            count = count + 1
+            rows[count] = row
+        end
+    end
     for key in pairs(rows) do
-        if not positiveInteger(key) or key > #keys then rows[key] = nil end
+        if not positiveInteger(key) or key > count then rows[key] = nil end
     end
 end
 
@@ -220,8 +231,8 @@ local function copyEntry(original)
 
     if clean(original.rolls, "table") then
         local winningRoll, ambiguousWinner
-        for _, rawRoll in ipairs(original.rolls) do
-            local roll = copyRoll(rawRoll)
+        for _, key in ipairs(numericRowKeys(original.rolls)) do
+            local roll = copyRoll(original.rolls[key])
             if roll then
                 entry.rolls[#entry.rolls + 1] = roll
                 if roll.name == winner then
@@ -248,8 +259,8 @@ function History.Import(charDB, upstreamCharDB, dateKey)
     local pending = {}
     for key, entries in pairs(upstreamDays) do
         if dayLabel(key) and clean(entries, "table") then
-            for _, original in ipairs(entries) do
-                local entry = copyEntry(original)
+            for _, index in ipairs(numericRowKeys(entries)) do
+                local entry = copyEntry(entries[index])
                 if entry then
                     local _, day = validTimestamp(entry.t, dateKey)
                     if day then

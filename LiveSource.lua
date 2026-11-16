@@ -42,6 +42,18 @@ local function read(method, ...)
     if ok and not isSecret(value) then return value end
 end
 
+local function readActiveRollSet()
+    local ids = clean(read(_G.GetActiveLootRollIDs), "table")
+    if not ids then return end
+    local active = {}
+    for _, value in pairs(ids) do
+        local id = key(value)
+        if not id then return end
+        active[id] = true
+    end
+    return active
+end
+
 local function updateObservationStart(observation, id, historyTime, duration, allowFallback)
     if not historyTime or observation.start and (not observation.provisionalStart or observation.historyKey) then return end
     local api = clean(_G.C_Loot, "table")
@@ -221,7 +233,8 @@ local function matchHistory(observation, choices)
     if not choices or not start then return end
     local match
     for _, candidate in pairs(choices) do
-        if math.abs(candidate.start - start) <= START_TOLERANCE then
+        local retired = observation.retiredHistory and observation.retiredHistory[candidate.key] == candidate.start
+        if not retired and math.abs(candidate.start - start) <= START_TOLERANCE then
             if match then
                 observation.ambiguous = true
                 return
@@ -243,6 +256,13 @@ end
 
 local function rememberAmbiguous(observation, other)
     observation.ambiguous, other.ambiguous = true, true
+end
+
+local function retireFinished(retired, id, observation, now)
+    local prior = observation and observation.renderedFrom
+    if prior and prior.finished and now then
+        retired[id] = { identity = observation.identity, key = prior.key, start = prior.start, at = now }
+    end
 end
 
 local function frameVisible(frame)
@@ -361,6 +381,7 @@ function Source:Refresh(scanHistory)
                 if observation.seenAt and now - observation.seenAt < 1 and not self.cancelled[id] then
                     observe(id)
                 else
+                    retireFinished(self.retired, id, observation, now)
                     self.observations[id] = nil
                 end
             end
@@ -424,7 +445,9 @@ function Source:Refresh(scanHistory)
                     winner.class = winner.class or winningRoll.class
                     if winner.guid == nil then winner.guid = winningRoll.guid end
                     winner.state = winner.state or winningRoll.state
-                    winner.roll = winner.roll or winningRoll.roll
+                    if winner.state == winningRoll.state then
+                        winner.roll = winner.roll or winningRoll.roll
+                    end
                 end
                 row.winner = winner or winningRoll
                 local rolls = clean(raw.rollInfos, "table")
@@ -449,7 +472,7 @@ end
 
 function Source:Reset()
     self.observations, self.cancelled, self.history, self.updates = {}, {}, {}, {}
-    self.forceRefresh, self.warmupUntil, self.warmupAt, self.historyRetries = false, nil, nil, {}
+    self.forceRefresh, self.warmupUntil, self.warmupAt, self.historyRetries, self.retired = false, nil, nil, {}, {}
 end
 
 function Source:Wake(scanHistory)
@@ -484,10 +507,32 @@ function Source:OnEvent(event, first, second)
             updateObservationStart(observation, id, number(read(api.GetLootHistoryTime)), second, true)
             observation.seenAt = number(read(_G.GetTime))
             if identity then observation.identity, observation.link = identity, link end
+            self.retired[id] = nil
             if identity then
+                local active
                 for otherID, other in pairs(self.observations) do
                     if otherID ~= id and other.identity == identity then
-                        rememberAmbiguous(observation, other)
+                        local prior = other.renderedFrom
+                        if prior and prior.finished and active == nil then active = readActiveRollSet() or false end
+                        if prior and prior.finished and active and active[id] and not active[otherID] then
+                            retireFinished(self.retired, otherID, other, observation.seenAt)
+                            self.observations[otherID], self.cancelled[otherID] = nil, true
+                        else
+                            rememberAmbiguous(observation, other)
+                        end
+                    end
+                end
+                for otherID, prior in pairs(self.retired) do
+                    if not observation.seenAt or observation.seenAt - prior.at > START_TOLERANCE then
+                        self.retired[otherID] = nil
+                    elseif prior.identity == identity then
+                        if active == nil then active = readActiveRollSet() or false end
+                        if active and active[id] and not active[otherID] then
+                            local retired = observation.retiredHistory or {}
+                            observation.retiredHistory = retired
+                            retired[prior.key] = prior.start
+                            self.cancelled[otherID] = true
+                        end
                     end
                 end
             end
@@ -498,6 +543,7 @@ function Source:OnEvent(event, first, second)
         local id = key(first)
         if id then
             self.cancelled[id] = true
+            retireFinished(self.retired, id, self.observations[id], number(read(_G.GetTime)))
             self.observations[id] = nil
         end
     elseif event == "CANCEL_ALL_LOOT_ROLLS" then
@@ -507,9 +553,9 @@ function Source:OnEvent(event, first, second)
         self.cancelled = cancelled
         self:Publish({})
     elseif event == "LOOT_HISTORY_CLEAR_HISTORY" then
-        self.history, self.updates, self.historyRetries = {}, {}, {}
+        self.history, self.updates, self.historyRetries, self.retired = {}, {}, {}, {}
         for _, observation in pairs(self.observations) do
-            observation.historyKey, observation.historyStart = nil, nil
+            observation.historyKey, observation.historyStart, observation.retiredHistory = nil, nil, nil
         end
         self:Publish({})
     elseif event == "LOOT_HISTORY_UPDATE_DROP" or event == "LOOT_HISTORY_UPDATE_ENCOUNTER" then

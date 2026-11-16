@@ -603,6 +603,72 @@ assert(row[2].done and row[2].winnerType == "need", "a new vote with distinct ow
 setDrops()
 engine = new()
 engine:Start()
+start(89)
+engine:HandleEvent("CANCEL_LOOT_ROLL", 89)
+advance(1)
+start(90)
+chat("Greed 99 on " .. link .. " by Priest")
+chat("Priest won " .. link)
+assert(#row[2].rolls == 0 and not row[2].done,
+    "a trailing score and winner cannot establish ownership for the newer identical popup")
+advance(2)
+chat("Greed 95 on " .. link .. " by Priest")
+chat("Priest won " .. link)
+assert(row[2].winnerValue == 95, "numbered votes remain available when the grace expires")
+
+setDrops()
+engine = new()
+engine:Start()
+start(91)
+chat("You need " .. link)
+engine:HandleEvent("CANCEL_LOOT_ROLL", 91)
+advance(1)
+start(92)
+chat(link .. " greed by Myself")
+chat("Greed 97 on " .. link .. " by Myself")
+chat("|HlootHistory:7|h[Loot]|h: Myself (Greed 97) won: " .. link)
+assert(row[2].winnerType == "greed" and row[2].winnerValue == 97,
+    "an earlier matching choice and distinct predecessor keep a proven score usable during the grace")
+
+setDrops()
+engine = new()
+engine:Start()
+start(93)
+local previousVote = roll("Priest", "PRIEST", 3, 86)
+previousVote.playerGUID = "Player-Priest"
+local previousNative = drop(243, clock, {previousVote})
+previousNative.duration = 60
+setDrops(previousNative)
+emitDrop(engine, 243)
+assert(#row == 1 and row[1].capture == "history" and #removed == 1)
+previousNative.winner = previousVote
+emitDrop(engine, 243)
+engine:HandleEvent("CANCEL_LOOT_ROLL", 93)
+advance(1)
+start(94)
+chat("Greed 86 on " .. link .. " by Priest")
+chat("Priest won " .. link)
+assert(not row[2].winner and #row[2].rolls == 0,
+    "a completed native predecessor still competes after its provisional row was removed")
+local nextVote = roll("Another", "ROGUE", 0, 92)
+local nextNative = drop(244, clock, {nextVote}, nextVote)
+setDrops(previousNative, nextNative)
+emitDrop(engine, 244)
+assert(#row == 2 and row[1].winner == "Priest" and row[2].winner == "Another",
+    "a uniquely matched native result can still resolve the newer drop during the grace")
+advance(2)
+emitDrop(engine, 243)
+emitDrop(engine, 244)
+advance(1)
+start(95)
+chat("Greed 86 on " .. link .. " by Priest")
+chat("Priest won " .. link)
+assert(row[3].winner == "Priest" and row[3].winnerValue == 86,
+    "replaying a terminal native snapshot does not extend the grace into an unrelated later roll")
+
+setDrops()
+engine = new()
+engine:Start()
 local cleanClock = C_LootHistory.GetLootHistoryTime
 C_LootHistory.GetLootHistoryTime = function() return secret end
 start(88)
@@ -661,4 +727,103 @@ emitDrop(engine, 21)
 assert(engine:GetParticipantGUID(remembered, "Unique") == "Player-Known")
 engine:Reset()
 assert(not engine:GetParticipantGUID(remembered, "Unique"), "fresh state must not retain old bindings")
+
+setDrops()
+engine = new()
+engine:Start()
+local scored = roll("Visible", "MAGE", 0, 83)
+scored.playerGUID = "Player-Visible"
+local scoredDrop = drop(42, clock, {scored})
+setDrops(scoredDrop)
+emitDrop(engine, 42)
+local current = roll("Visible", "MAGE", 0, secret)
+current.playerGUID = "Player-Visible"
+scoredDrop.rollInfos = {current, secret}
+emitDrop(engine, 42)
+assert(row[1].rolls[1].value == 83, "retain the exact known score while it is unreadable")
+current.roll = 89
+emitDrop(engine, 42)
+assert(row[1].rolls[1].value == 89)
+current.state, current.roll = 1, nil
+emitDrop(engine, 42)
+assert(row[1].rolls[1].value == nil, "another native Need type cannot inherit a score")
+current.roll = 92
+emitDrop(engine, 42)
+current.playerGUID, current.roll = "Player-Replacement", nil
+emitDrop(engine, 42)
+assert(row[1].rolls[1].value == nil, "the same rendered name cannot inherit another GUID's score")
+current.playerGUID = "Player-Visible"
+local conflicting = roll("Other", "MAGE", 1, nil)
+conflicting.playerGUID = current.playerGUID
+scoredDrop.rollInfos = {current, conflicting}
+emitDrop(engine, 42)
+assert(row[1].rolls[1].value == nil and row[1].rolls[2].value == nil,
+    "a duplicated GUID cannot inherit a cached score")
+
+setDrops()
+engine = new()
+engine:Start()
+local finishedVote = roll("Confirmed", "MAGE", 0, 86)
+finishedVote.playerGUID = "Player-Confirmed"
+local finishedDrop = drop(43, clock, {finishedVote})
+setDrops(finishedDrop)
+emitDrop(engine, 43)
+finishedVote.roll = secret
+finishedDrop.winner = {playerName = "Confirmed", playerClass = "MAGE", playerGUID = "Player-Confirmed", state = 0}
+emitDrop(engine, 43)
+assert(row[1].winnerValue == 86 and row[1].rolls[1].value == 86,
+    "the confirmed winner uses the earlier score for the same GUID and native state")
+
+setDrops()
+engine = new()
+engine:Start()
+finishedVote.roll = 87
+finishedDrop = drop(44, clock, {finishedVote})
+setDrops(finishedDrop)
+emitDrop(engine, 44)
+finishedVote.roll = secret
+finishedDrop.winner = {playerName = "Confirmed", playerClass = "MAGE", playerGUID = "Player-Confirmed", state = 1}
+emitDrop(engine, 44)
+assert(row[1].done and not row[1].winnerValue, "a different terminal native state cannot borrow an old score")
+
+local function knownWinner(key)
+    setDrops()
+    engine = new()
+    engine:Start()
+    local vote = roll("Confirmed", "MAGE", 0, 86)
+    vote.playerGUID = "Player-Confirmed"
+    local tracked = drop(key, clock, {vote}, vote)
+    setDrops(tracked)
+    emitDrop(engine, key)
+    assert(row[1].winnerType == "need" and row[1].winnerValue == 86)
+    return vote
+end
+
+local correctedWinner = knownWinner(45)
+correctedWinner.state, correctedWinner.roll = secret, secret
+emitDrop(engine, 45)
+assert(row[1].winnerType == "need" and row[1].winnerValue == 86,
+    "a masked winner choice and value do not invalidate previously confirmed data")
+correctedWinner.state, correctedWinner.roll = 3, nil
+emitDrop(engine, 45)
+assert(row[1].winnerType == "greed" and row[1].winnerValue == nil,
+    "a confirmed Greed winner cannot inherit a previous Need score")
+
+correctedWinner = knownWinner(46)
+correctedWinner.state, correctedWinner.roll = 1, nil
+emitDrop(engine, 46)
+assert(row[1].winnerType == "need" and row[1].winnerValue == nil,
+    "different native Need states cannot share a previously confirmed score")
+
+correctedWinner = knownWinner(47)
+correctedWinner.playerClass, correctedWinner.roll = "PRIEST", nil
+emitDrop(engine, 47)
+assert(row[1].winnerClass == "PRIEST" and row[1].winnerValue == nil,
+    "a corrected winner class cannot inherit a previous score")
+
+correctedWinner = knownWinner(48)
+correctedWinner.roll = 0
+emitDrop(engine, 48)
+assert(row[1].winnerValue == nil, "an explicit invalid score is different from a masked score")
+
 print("Capture tests passed")

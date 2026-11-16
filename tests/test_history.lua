@@ -73,6 +73,18 @@ assert(History.Import(ambigDB, {days = {[day] = {{
 }}}}, dateKey))
 assert(ambigDB.days[day][1].winnerType == nil)
 
+local sparseDB = {days = {}}
+local sparseEntry = {
+    link = link, t = 22, winner = "Winner",
+    rolls = {[1] = {name = "Other", type = "pass"}, [3] = {name = "Winner", type = "need", value = "94"}},
+}
+local sparseUpstream = {days = {[day] = {[1] = first, [3] = sparseEntry, junk = second}}}
+assert(History.Import(sparseDB, sparseUpstream, dateKey))
+assert(#sparseDB.days[day] == 2 and #sparseDB.days[day][2].rolls == 2)
+assert(sparseDB.days[day][2].winnerValue == 94 and sparseDB.days[day][2].winnerType == "need")
+assert(sparseUpstream.days[day][2] == nil and sparseEntry.rolls[2] == nil)
+assert(not History.Import(sparseDB, sparseUpstream, dateKey), "sparse import stays one-time")
+
 local visits = History.NewVisits(charDB)
 assert(visits:Get() == nil)
 assert(visits:Update(nil, nil, 30, false) == nil)

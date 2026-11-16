@@ -83,21 +83,35 @@ local function readRoll(raw, stateTypes)
         class = nonempty(raw.playerClass),
         type = rollType,
         value = rollValue(raw.roll),
-    }
+    }, state
 end
 
-local function readRolls(rawRolls, stateTypes, previous, resolveLevels, playerLevels, winningRoll)
+local function missingRollValue(raw)
+    return not raw or isSecret(raw.roll) or raw.roll == nil
+end
+
+local function readRolls(rawRolls, stateTypes, previous, resolveLevels, playersByGUID, winningRoll)
     if not clean(rawRolls, "table") then return nil end
+    local uniqueGUIDs = {}
+    for _, raw in ipairs(rawRolls) do
+        local guid = clean(raw, "table") and nonempty(raw.playerGUID)
+        if guid then uniqueGUIDs[guid] = uniqueGUIDs[guid] == nil end
+    end
     local rolls = {}
     for _, raw in ipairs(rawRolls) do
-        local roll = readRoll(raw, stateTypes)
+        local roll, state = readRoll(raw, stateTypes)
         if roll and roll.name then
             roll.isWinner = winningRoll ~= nil and rawequal(raw, winningRoll)
             local guid = nonempty(raw.playerGUID)
             if guid then
-                local known = playerLevels[guid]
-                if known and (not roll.class or known.class == roll.class) then
-                    roll.class, roll.level = known.class, known.level
+                local known = uniqueGUIDs[guid] and playersByGUID[guid]
+                if known and (not roll.class or not known.class or known.class == roll.class) then
+                    roll.class, roll.level = roll.class or known.class, known.level
+                    -- A restricted score cannot replace an earlier score for
+                    -- this exact participant and native roll choice.
+                    if state == known.state and not roll.value and missingRollValue(raw) then
+                        roll.value = known.value
+                    end
                 end
             else
                 local matched
@@ -118,9 +132,14 @@ local function readRolls(rawRolls, stateTypes, previous, resolveLevels, playerLe
                     roll.class, roll.level = class, level
                 end
             end
-            if guid and roll.class then playerLevels[guid] = { class = roll.class, level = roll.level } end
+            if guid and uniqueGUIDs[guid] then
+                playersByGUID[guid] = { class = roll.class, level = roll.level, state = state, value = roll.value }
+            end
             rolls[#rolls + 1] = roll
         end
+    end
+    for guid, unique in pairs(uniqueGUIDs) do
+        if not unique then playersByGUID[guid] = nil end
     end
     return rolls
 end
@@ -385,6 +404,7 @@ function ns.NewCapture(callbacks)
     local chatByID = {}
     local chatByLink = {}
     local nativeActive = {}
+    local nativeCompleted = {}
     local coveredRolls = {}
     local canSchedule = type(_G.C_Timer) == "table" and type(_G.C_Timer.After) == "function"
     local fallbackAvailable = type(_G.GetLootRollItemLink) == "function"
@@ -439,6 +459,18 @@ function ns.NewCapture(callbacks)
             entries[slot] = nil
             if not next(entries) then nativeActive[slot.identity] = nil end
         end
+    end
+
+    local function rememberNativeCompletion(slot, observedAt)
+        local identity = slot.identity
+        local entries = nativeCompleted[identity] or {}
+        nativeCompleted[identity] = entries
+        entries[slot] = observedAt
+        _G.C_Timer.After(LATE_CHAT_GRACE + 1, function()
+            if nativeCompleted[identity] ~= entries then return end
+            entries[slot] = nil
+            if not next(entries) then nativeCompleted[identity] = nil end
+        end)
     end
 
     local function observeNativeActivity(slot, raw, terminal)
@@ -610,10 +642,16 @@ function ns.NewCapture(callbacks)
         end
     end
 
-    local function supportsChatWinner(roll, parsed)
+    local function supportsChatChoice(roll, choice, value)
         return roll and roll.type ~= "pass"
-            and (not parsed.winnerType or roll.type == parsed.winnerType)
-            and (not parsed.value or not roll.value or roll.value == parsed.value)
+            and (not choice or roll.type == choice)
+            and (not value or not roll.value or roll.value == value)
+    end
+
+    local function matchesPreviousWinner(entry, parsed)
+        return entry.winner == parsed.player
+            and (not parsed.winnerType or not entry.winnerType or entry.winnerType == parsed.winnerType)
+            and (not parsed.value or not entry.winnerValue or entry.winnerValue == parsed.value)
     end
 
     local function handleLootChat(message)
@@ -643,6 +681,13 @@ function ns.NewCapture(callbacks)
         if not target then recentlyClosed = nil end
         target = target or (not multipleClosed and closedTarget)
         if not target or target.entry.ambiguous then return end
+        -- A native result may have already replaced its popup's chat row.
+        for slot, completedAt in pairs(nativeCompleted[parsed.identity] or {}) do
+            if observedAt >= completedAt and observedAt - completedAt <= LATE_CHAT_GRACE then
+                recentlyClosed = recentlyClosed or {}
+                recentlyClosed[#recentlyClosed + 1] = slot.entry
+            end
+        end
         local entry = target.entry
         local getActiveRollIDs = _G.GetActiveLootRollIDs
         if type(getActiveRollIDs) == "function" then
@@ -674,9 +719,12 @@ function ns.NewCapture(callbacks)
                 if recentlyClosed then
                     -- A result near cancellation needs evidence from the new
                     -- roll that cannot also describe a recently closed roll.
-                    if not supportsChatWinner(roll, parsed) then return end
+                    if not supportsChatChoice(roll, parsed.winnerType, parsed.value) then return end
                     for _, predecessor in ipairs(recentlyClosed) do
-                        if supportsChatWinner(findChatRoll(predecessor, parsed.player), parsed) then return end
+                        if matchesPreviousWinner(predecessor, parsed)
+                            or supportsChatChoice(findChatRoll(predecessor, parsed.player), parsed.winnerType, parsed.value) then
+                            return
+                        end
                     end
                 end
                 entry.done, entry.closed = true, nil
@@ -688,19 +736,30 @@ function ns.NewCapture(callbacks)
                     roll.type, roll.value = parsed.winnerType, parsed.value
                 end
                 if roll then roll.isWinner = true end
-            elseif roll then
-                if roll.type == parsed.kind and (not parsed.value or parsed.value == roll.value) then return end
-                if roll.type ~= parsed.kind then roll.value = nil end
-                roll.type = parsed.kind
-                roll.value = parsed.value or roll.value
             else
-                entry.rolls[#entry.rolls + 1] = {
-                    name = parsed.player,
-                    class = class,
-                    level = level,
-                    type = parsed.kind,
-                    value = parsed.value,
-                }
+                if recentlyClosed and parsed.value then
+                    -- A value-only line can trail cancellation. It cannot be
+                    -- the first evidence of ownership for the newer roll.
+                    if not supportsChatChoice(roll, parsed.kind, parsed.value) then return end
+                    for _, predecessor in ipairs(recentlyClosed) do
+                        local prior = findChatRoll(predecessor, parsed.player)
+                        if not prior or supportsChatChoice(prior, parsed.kind, parsed.value) then return end
+                    end
+                end
+                if roll then
+                    if roll.type == parsed.kind and (not parsed.value or parsed.value == roll.value) then return end
+                    if roll.type ~= parsed.kind then roll.value = nil end
+                    roll.type = parsed.kind
+                    roll.value = parsed.value or roll.value
+                else
+                    entry.rolls[#entry.rolls + 1] = {
+                        name = parsed.player,
+                        class = class,
+                        level = level,
+                        type = parsed.kind,
+                        value = parsed.value,
+                    }
+                end
             end
         end
         if entry.done then
@@ -744,7 +803,7 @@ function ns.NewCapture(callbacks)
             slot = nil
         end
         if not slot then
-            slot = { startTime = startTime, identity = identity, playerLevels = {} }
+            slot = { startTime = startTime, identity = identity, playersByGUID = {} }
             drops[lootListKey] = slot
             if callbacks.getExisting then
                 slot.entry = callbacks.getExisting(encounterID, lootListKey, startTime, link)
@@ -755,6 +814,7 @@ function ns.NewCapture(callbacks)
         if slot.ignored then return end
         local previous = slot.entry
         local isNew = previous == nil
+        local wasDone = previous and previous.done
         local entry = previous
         local observedAt = time()
         if not slot.startedAt then
@@ -800,28 +860,38 @@ function ns.NewCapture(callbacks)
             changed = true
         end
         local rolls = readRolls(raw.rollInfos, states, entry.rolls,
-            not entry.done and not entry.closed and not baseline, slot.playerLevels, presentationWinner)
+            not entry.done and not entry.closed and not baseline, slot.playersByGUID, presentationWinner)
         if rolls and not sameRolls(entry.rolls, rolls) then
             entry.rolls = rolls
             changed = true
         end
 
-        local winner = readRoll(winnerInfo, states)
+        local winner, winnerState = readRoll(winnerInfo, states)
         local winnerValue = winnerInfo and rollValue(winnerInfo.roll)
         local winnerGUID
         if winnerInfo or winningRoll then
             local winnerType = winner and winner.type
+            local scoreMissing = missingRollValue(winnerInfo)
             winnerGUID = (winnerInfo and nonempty(winnerInfo.playerGUID))
                 or (winningRoll and nonempty(winningRoll.playerGUID))
             if winningRoll then
-                local fallback = readRoll(winningRoll, states)
+                local fallback, fallbackState = readRoll(winningRoll, states)
                 winnerName = winnerName or nonempty(winningRoll.playerName)
                 winnerClass = winnerClass or nonempty(winningRoll.playerClass)
                 winnerType = winnerType or (fallback and fallback.type)
-                winnerValue = winnerValue or rollValue(winningRoll.roll)
+                if not winnerState or winnerState == fallbackState then
+                    winnerState = winnerState or fallbackState
+                    winnerValue = winnerValue or rollValue(winningRoll.roll)
+                    scoreMissing = scoreMissing and missingRollValue(winningRoll)
+                end
+            end
+            local known = winnerGUID and slot.playersByGUID[winnerGUID]
+            if not winnerValue and known and winnerState == known.state
+                and (not winnerClass or not known.class or known.class == winnerClass)
+                and scoreMissing then
+                winnerValue = known.value
             end
             if winnerGUID and not winnerClass then
-                local known = slot.playerLevels[winnerGUID]
                 winnerClass = known and known.class
                 if not winnerClass and not baseline then winnerClass = groupMember(winnerName, winnerGUID) end
             end
@@ -831,12 +901,17 @@ function ns.NewCapture(callbacks)
             local changedIdentity = winnerGUID and priorWinnerGUID and not sameIdentity
             if winnerGUID then slot.winnerGUID = winnerGUID end
             if changedIdentity or (winnerName and winnerName ~= entry.winner) then
+                slot.winnerState = winnerType and winnerState or nil
                 entry.winner = winnerName
                 entry.winnerClass = winnerClass
                 entry.winnerType = winnerType
                 entry.winnerValue = winnerValue
                 changed = true
             elseif sameIdentity or not entry.winner or (winnerName and winnerName == entry.winner) then
+                local classChanged = winnerClass and entry.winnerClass and winnerClass ~= entry.winnerClass
+                local choiceChanged = winnerType and ((entry.winnerType and winnerType ~= entry.winnerType)
+                    or (slot.winnerState and winnerState ~= slot.winnerState))
+                if winnerType then slot.winnerState = winnerState end
                 if winnerClass and winnerClass ~= entry.winnerClass then
                     entry.winnerClass = winnerClass
                     changed = true
@@ -845,7 +920,8 @@ function ns.NewCapture(callbacks)
                     entry.winnerType = winnerType
                     changed = true
                 end
-                if winnerValue and winnerValue ~= entry.winnerValue then
+                if (winnerValue or choiceChanged or classChanged or not scoreMissing)
+                    and winnerValue ~= entry.winnerValue then
                     entry.winnerValue = winnerValue
                     changed = true
                 end
@@ -866,6 +942,9 @@ function ns.NewCapture(callbacks)
         participantGUIDs[entry] = bindings
         if fallbackAvailable and not baseline and (isNew or wasActive or slot.expiry) then
             blockChatForNative(identity, slot, encounterDrops)
+        end
+        if fallbackAvailable and not baseline and entry.done and not wasDone then
+            rememberNativeCompletion(slot, observedAt)
         end
         if changed or bindingsChanged then callbacks.onDrop(entry, isNew, baseline) end
     end
@@ -901,7 +980,7 @@ function ns.NewCapture(callbacks)
     function engine:Reset()
         seen = {}
         participantGUIDs = setmetatable({}, { __mode = "k" })
-        chatByID, chatByLink, coveredRolls, nativeActive = {}, {}, {}, {}
+        chatByID, chatByLink, coveredRolls, nativeActive, nativeCompleted = {}, {}, {}, {}, {}
         if available and started then
             -- Suppress rows still in the game's history after an addon history reset.
             baseline()
@@ -938,7 +1017,7 @@ function ns.NewCapture(callbacks)
         if event == "LOOT_HISTORY_CLEAR_HISTORY" then
             local previous = seen
             seen = {}
-            coveredRolls, nativeActive = {}, {}
+            coveredRolls, nativeActive, nativeCompleted = {}, {}, {}
             participantGUIDs = setmetatable({}, { __mode = "k" })
             captureStart = clean(read(api.GetLootHistoryTime), "number")
             for _, drops in pairs(previous) do

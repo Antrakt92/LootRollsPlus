@@ -229,6 +229,19 @@ end
 assert(protectedNumberSeen, "a known choice should survive a secret roll number")
 assert(protectedGUIDSeen, "restricted identities must block name-only inspection without losing the vote")
 
+current.rollInfos = {winner, offspec}
+current.winner = player("Mage", "MAGE", 1)
+emit("LOOT_HISTORY_UPDATE_DROP", 77, 19)
+advance()
+local offspecWinner = expect(source, 123).winner
+assert(offspecWinner and offspecWinner.state == "offspec" and not offspecWinner.roll,
+    "the winner must not inherit a main-spec score for an off-spec choice")
+current.winner = player("Mage", "MAGE")
+emit("LOOT_HISTORY_UPDATE_DROP", 77, 19)
+advance()
+assert(expect(source, 123).winner.state == "need" and expect(source, 123).winner.roll == 96,
+    "a uniquely matched native vote can fill both fields when the winner omits the choice")
+
 -- A different popup can immediately reuse the same Blizzard frame object.
 emit("CANCEL_LOOT_ROLL", 123)
 rolls[123] = nil
@@ -447,5 +460,48 @@ assert(#expect(source, 902).rolls == 0, "delivery-time fallback must not bind vo
 GetLootRollTimeLeft = readTimeLeft
 advance()
 assert(expect(source, 902).rolls[1].name == "Mage", "a readable timer must bind the actual earlier drop")
+
+for _, ordering in ipairs({"start", "cancel", "prune", "restricted", "restrictedCancel"}) do
+    reset()
+    local recycled = popup(903, 1, link)
+    local oldDrop = drop(27, clock, link, {need})
+    drops[77] = {oldDrop}
+    source = newSource()
+    assert(#expect(source, 903).rolls == 1)
+    oldDrop.winner = player("Old winner", "MAGE", 0, 96)
+    emit("LOOT_HISTORY_UPDATE_DROP", 77, 27)
+    advance()
+    assert(expect(source, 903).winner and expect(source, 903).winner.name == "Old winner")
+    rolls[903] = nil
+    if ordering == "cancel" or ordering == "restrictedCancel" then
+        emit("CANCEL_LOOT_ROLL", 903)
+        recycled:Hide()
+        advance()
+    elseif ordering == "prune" then
+        GroupLootContainer.rollFrames[1] = nil
+        advance()
+    end
+    recycled.rollID = 904
+    recycled:Show()
+    GroupLootContainer.rollFrames[1] = recycled
+    rolls[904] = {link = link, finish = clock + 60}
+    drops[77][2] = drop(28, clock, link, {offspec})
+    local getActive = GetActiveLootRollIDs
+    local restricted = ordering == "restricted" or ordering == "restrictedCancel"
+    if restricted then GetActiveLootRollIDs = function() return secret end end
+    emit("START_LOOT_ROLL", 904, 60000)
+    emit("LOOT_HISTORY_UPDATE_DROP", 77, 28)
+    advance()
+    GetActiveLootRollIDs = getActive
+    local latest = expect(source, 904)
+    assert(not lookup(source, 903))
+    if not restricted then
+        assert(not latest.ambiguous and not latest.winner and #latest.rolls == 1 and latest.rolls[1].name == "Paladin",
+            "the finished popup must not taint or supply the next same-item roll")
+    else
+        assert(latest.ambiguous and #latest.rolls == 0,
+            "a restricted active roll list cannot prove the old popup is gone")
+    end
+end
 
 print("Live source timing, attribution, privacy, and lifecycle tests passed")
