@@ -3,7 +3,7 @@
 ## IconTexture: Interface\AddOns\LootRollsPlus\media\addon-icon.png
 ## Notes: See group loot choices, winning rolls and dungeon history in WoW Forever.
 ## Author: Antrakt92, based on Loot Rolls Inspector by Carlos
-## Version: 1.2.0
+## Version: 1.2.1
 ## X-Curse-Project-ID: 1806323
 ## SavedVariables: LootRollsPlusDB
 ## SavedVariablesPerCharacter: LootRollsPlusCharDB

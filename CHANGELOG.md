@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.1 — 16-Nov-2026 — Roll results and panel placement
+
+- Keep back-to-back rolls on identical items separate. Preserve known roll numbers when the game temporarily hides them and clear old numbers when the choice changes.
+- Recover late winners in History after a reload, import older records even when the original history has gaps, and hide the scrollbar when all rows fit.
+- Keep roll panels, expanded raid lists and equipment tooltips clear of nearby loot buttons and Pawn when space allows. Shorten the visible raid list on crowded screens while keeping every player accessible by scrolling.
+- Refresh Mastercraft's disenchant estimate when item data finishes loading. Retry incomplete two-slot equipment checks for winners while preserving earlier gear if a known slot changed.
+
 ## 1.2.0 — 15-Nov-2026 — Equipment slots and roll tracking
 
 - Click the equipped item tooltip to switch between two matching slots when both are known.
