@@ -319,6 +319,8 @@ local function unitNames(unit)
     return full, first
 end
 
+ns.GetLootPlayerNames = unitNames
+
 local function parseChat(rules, message)
     if not nonempty(message) then return end
     for _, rule in ipairs(rules) do

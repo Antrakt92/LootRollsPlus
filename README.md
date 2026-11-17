@@ -30,7 +30,7 @@
 - **Party:** see who picked Need, Greed or Pass beside the game's loot prompt.
 - **Raid:** see totals and the leading Need rolls. Click the summary for the player list.
 - **Equipment:** click a player on an equippable drop to inspect the matching slot. Click the equipped item tooltip to switch slots when both are known. Hover the game's item icon to see the drop.
-- **History:** switch dates and browse rolls by dungeon or raid visit. Hover for participants, or click for side-by-side item tooltips.
+- **History:** browse rolls by date and dungeon or raid visit, or select **My wins** to see what your character won that day. Hover for participants, or click for side-by-side item tooltips.
 - **Need warnings:** red marks equipment the class cannot use. Orange marks armor below its usual tier. The game determines the winner.
 
 ![Live party choices to the left of the in-game loot prompt](media/live-party-roll.png)

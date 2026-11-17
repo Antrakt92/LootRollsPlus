@@ -835,16 +835,20 @@ end
 local function BuildEntries()
     local entries = selectedDay and days[selectedDay]
     local groups, byVisit = {}, {}
+    local fullName, firstName
+    if hist.myWins.active then fullName, firstName = ns.GetLootPlayerNames("player") end
     for i = entries and #entries or 0, 1, -1 do
         local e = entries[i]
-        local key = e.visit and e.visit.id or (e.legacy and "legacy" or "outside")
-        local group = byVisit[key]
-        if not group then
-            group = { visit = e.visit, imported = e.legacy, entries = {} }
-            byVisit[key] = group
-            groups[#groups + 1] = group
+        if not hist.myWins.active or ns.History.IsPlayerWin(e, fullName, firstName) then
+            local key = e.visit and e.visit.id or (e.legacy and "legacy" or "outside")
+            local group = byVisit[key]
+            if not group then
+                group = { visit = e.visit, imported = e.legacy, entries = {} }
+                byVisit[key] = group
+                groups[#groups + 1] = group
+            end
+            group.entries[#group.entries + 1] = e
         end
-        group.entries[#group.entries + 1] = e
     end
 
     local rowIndex, headerIndex, offset = 0, 0, 0
@@ -889,9 +893,20 @@ local function BuildEntries()
         histRows[index]:Hide()
     end
     for index = headerIndex + 1, #visitHeaders do visitHeaders[index]:Hide() end
+    historyEmpty:SetText(hist.myWins.active and Label("No wins on this date", "В этот день выигрышей нет") or L.noRolls)
     historyEmpty:SetShown(rowIndex == 0)
     content:SetHeight(math.max(offset, ROW_H))
 end
+
+hist.myWins = TextButton(Label("My wins", "Мои выигрыши"), hist, "LootRollsPlusMyWins")
+hist.myWins:SetPoint("RIGHT", optBtn, "LEFT", -4, 0)
+hist.myWins:SetScript("OnClick", function(self)
+    self.active = not self.active
+    PaintButton(self)
+    scroll:SetVerticalScroll(0)
+    BuildEntries()
+    FitHistory()
+end)
 
 local function SelectDay(key)
     selectedDay = key

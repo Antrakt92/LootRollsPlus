@@ -40,6 +40,21 @@ local function playerName(value)
     return plainText(linkLabel or uncolored)
 end
 
+function History.IsPlayerWin(entry, fullName, firstName)
+    local winner = entry.done and plainText(entry.winner)
+    if not winner then return false end
+    if fullName and fullName ~= firstName and winner == fullName then return true end
+    if winner ~= firstName then return false end
+    for _, roll in ipairs(entry.rolls or {}) do
+        local name = plainText(roll.name)
+        if name and name ~= winner and name ~= fullName
+            and addon.RollDisplay.ShortName(name) == firstName then
+            return false
+        end
+    end
+    return true
+end
+
 local function itemLink(value)
     value = clean(value, "string")
     if not value or value:find("%c") then return end

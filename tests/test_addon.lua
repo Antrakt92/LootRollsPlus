@@ -1088,6 +1088,33 @@ assert(history:GetHeight() == shortHeight and itemScroll:GetWidth() == shortWidt
 assert(not itemScroll.ScrollBar:IsShown() and itemScroll:GetVerticalScroll() == 0)
 assert(historyRow:GetWidth() == shortWidth, "reused history row did not regain the scrollbar gutter")
 
+do
+    local entries = LootRollsPlusCharDB.days[shortDate]
+    local own = historyEntry(shortTimestamp)
+    own.allpassed, own.winner = nil, "Self"
+    local other = historyEntry(shortTimestamp)
+    other.allpassed, other.winner = nil, "Self-Other"
+    local ambiguous = historyEntry(shortTimestamp)
+    ambiguous.allpassed, ambiguous.winner = nil, "Self"
+    ambiguous.rolls = {{name = "Self-Other", type = "need", value = 42}}
+    for _, entry in ipairs({own, other, ambiguous}) do entries[#entries + 1] = entry end
+    local filter = LootRollsPlusMyWins
+    filter:GetScript("OnClick")(filter)
+    local rows = {}
+    for _, child in ipairs(itemScroll.scrollChild.children) do
+        if child.entry and child:IsShown() then rows[#rows + 1] = child.entry end
+    end
+    assert(#rows == 1 and rows[1] == own, "My wins must display only the confirmed match")
+    selectDate(dateScroll, longDate)
+    for _, child in ipairs(itemScroll.scrollChild.children) do
+        assert(not child.entry or not child:IsShown(), "My wins remains active when changing dates")
+    end
+    filter:GetScript("OnClick")(filter)
+    assert(nextVisibleRow(itemScroll.scrollChild), "turning off My wins restores the selected day's rolls")
+    selectDate(dateScroll, shortDate)
+    for _ = 1, 3 do table.remove(entries) end
+end
+
 for i = 2, 24 do
     local timestamp = shortTimestamp - i * 86400
     LootRollsPlusCharDB.days[date("%Y-%m-%d", timestamp)] = {historyEntry(timestamp)}

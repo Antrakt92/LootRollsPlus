@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.0 — 17-Nov-2026 — My wins in History
+
+- Filter a day's loot history to the items your current character won.
+
 ## 1.2.1 — 16-Nov-2026 — Roll results and panel placement
 
 - Keep back-to-back rolls on identical items separate. Preserve known roll numbers when the game temporarily hides them and clear old numbers when the choice changes.
