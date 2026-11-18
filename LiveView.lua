@@ -749,6 +749,11 @@ function view:Render(entries, raid, demo)
     if watch and not geometryWatch:IsShown() then geometryWatch.elapsed = 0 end
     geometryWatch.entries = watch and entries or nil
     geometryWatch.raid = watch and raid or nil
+    if watch then
+        local width, height = UIParent:GetWidth(), UIParent:GetHeight()
+        geometryWatch.width = finite(width) and width or nil
+        geometryWatch.height = finite(height) and height or nil
+    end
     geometryWatch:SetShown(watch)
     local pawnRects = watch and view.VisiblePawnRects() or {}
     local promptRects = watch and view.VisiblePromptRects() or {}
@@ -770,9 +775,13 @@ geometryWatch:SetScript("OnUpdate", function(self, elapsed)
     self.elapsed = self.elapsed + elapsed
     if self.elapsed < 0.2 then return end
     self.elapsed = 0
+    local width, height = UIParent:GetWidth(), UIParent:GetHeight()
+    if not finite(width) or not finite(height) then return end
     local pawnRects = view.VisiblePawnRects()
     local promptRects = view.VisiblePromptRects()
-    if sameRectangles(self.pawnRects, pawnRects) and sameRectangles(self.promptRects, promptRects) then return end
+    if self.width == width and self.height == height
+        and sameRectangles(self.pawnRects, pawnRects) and sameRectangles(self.promptRects, promptRects) then return end
+    self.width, self.height = width, height
     self.pawnRects, self.promptRects = pawnRects, promptRects
     render(self.entries, self.raid, false, pawnRects, promptRects)
     if view.OnPlacementChanged then view.OnPlacementChanged() end

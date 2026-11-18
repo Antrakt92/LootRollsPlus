@@ -1618,6 +1618,10 @@ auditAnchor.mockBottom, auditAnchor.mockTop = 360, 415
 auditView:Render({auditEntry(shield)}, false, false)
 assert(auditCard:IsVisible() and auditCard.lastPoint[2] == UIParent and auditCard.lastPoint[3] == "BOTTOMLEFT",
     "a compact roll panel should use vertical space when neither side can fit")
+UIParent:SetSize(650, 800)
+local sizeWatcher = LootRollsPlusLiveGeometry
+sizeWatcher:GetScript("OnUpdate")(sizeWatcher, 0.2)
+assert(auditCard.placement == "right", "widening the screen must let the panel move beside an unchanged prompt")
 auditAnchor.mockScale = math.huge
 auditView:Render({auditEntry(shield)}, false, false)
 assert(not auditCard:IsVisible(), "nonfinite geometry cannot be used as an anchor")
