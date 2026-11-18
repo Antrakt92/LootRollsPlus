@@ -209,9 +209,9 @@ local function ClearItemRequest(link)
 end
 
 local function RequestItemData(link)
-    if not pendingItems[link] and pendingItemCount < MAX_PENDING_ITEMS and Item and Item.CreateFromItemLink then
-        local item = Item:CreateFromItemLink(link)
-        if item and item.ContinueOnItemLoad then
+    if not pendingItems[link] and pendingItemCount < MAX_PENDING_ITEMS and Item and type(Item.CreateFromItemLink) == "function" then
+        local created, item = pcall(Item.CreateFromItemLink, Item, link)
+        if created and not isSecret(item) and type(item) == "table" and type(item.ContinueOnItemLoad) == "function" then
             local request = {}
             pendingItems[link] = request
             pendingItemCount = pendingItemCount + 1
@@ -226,7 +226,9 @@ local function RequestItemData(link)
                 ClearItemRequest(link)
             else
                 C_Timer.After(15, function()
-                    if pendingItems[link] == request then ClearItemRequest(link) end
+                    if pendingItems[link] ~= request then return end
+                    ClearItemRequest(link)
+                    if comparisonNeedsItem and comparisonNeedsItem(link, request) then queueRefresh() end
                 end)
             end
         end
@@ -1128,7 +1130,9 @@ local function ShowComparisonTooltip(tooltip, link, status, disenchant)
             RequestItemData(link)
         end
         tooltip:SetOwner(details, "ANCHOR_NONE")
-        tooltip:SetText(Label("Loading item…", "Загрузка предмета…"), 1, 1, 1, 1, true)
+        local message = pendingItems[link] and Label("Loading item…", "Загрузка предмета…")
+            or Label("Item data unavailable", "Данные предмета недоступны")
+        tooltip:SetText(message, 1, 1, 1, 1, true)
     else
         tooltip.requestedLink = nil
     end
@@ -1443,6 +1447,9 @@ local function DrawComparison()
         local expectedGUID = capture:GetParticipantGUID(detailEntry, selectedPlayer)
         snapshot = unique and class == selectedClass and SavedInspection(detailEntry, selectedPlayer, class, expectedGUID)
         status = inspectionMessages[inspectionState]
+        if inspectionState == "itemPending" and not pendingItems[detailEntry.link] then
+            status = Label("Item data unavailable", "Данные предмета недоступны")
+        end
         if not unique or class ~= selectedClass or expectedGUID == false then
             status = inspectionMessages[class == "ambiguous" and "ambiguous" or "unavailable"]
         end

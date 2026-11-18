@@ -43,7 +43,7 @@ end
 function widget:SetText(value) self.value = value end
 function widget:SetOwner(owner) self.tooltipOwner = owner end
 function widget:SetHyperlink(link)
-    if self.failNextHyperlink then
+    if self.failNextHyperlink or self.failHyperlink then
         self.failNextHyperlink = nil
         self:Hide()
         return false
@@ -728,13 +728,27 @@ Item = {CreateFromItemLink = function()
 end}
 leftCard.failNextHyperlink = true
 comparisonRow:GetScript("OnClick")(comparisonRow)
+leftCard.failHyperlink = true
 timerNow = timerNow + 16
 flushTimers()
+flushTimers()
+contains(leftCard.value, "Item data unavailable")
+leftCard.failHyperlink = nil
 mastercraftValue = "~14s 97c"
 assert(loadedItem, "custom card must request cold data even when the stock tooltip has the right item")()
 flushTimers()
 assert(leftCard.doubleLines[3] and leftCard.doubleLines[3][2] == "~14s 97c",
     "the cold card must re-read Mastercraft even when the stock tooltip recognized the item")
+comparisonRow:GetScript("OnClick")(comparisonRow)
+timerNow = timerNow + 16
+flushTimers()
+Item = {CreateFromItemLink = function()
+    return {ContinueOnItemLoad = function() error("item no longer exists") end}
+end}
+leftCard.failNextHyperlink = true
+comparisonRow:GetScript("OnClick")(comparisonRow)
+contains(leftCard.value, "Item data unavailable")
+assert(rightCard.tooltipLink == equipped, "an unavailable drop should still show its saved comparison")
 comparisonRow:GetScript("OnClick")(comparisonRow)
 local itemMetadata = C_Item.GetItemInfoInstant
 C_Item.GetItemInfoInstant = function() return nil end
