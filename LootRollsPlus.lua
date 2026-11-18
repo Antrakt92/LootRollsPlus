@@ -835,11 +835,15 @@ end
 local function BuildEntries()
     local entries = selectedDay and days[selectedDay]
     local groups, byVisit = {}, {}
-    local fullName, firstName
-    if hist.myWins.active then fullName, firstName = ns.GetLootPlayerNames("player") end
+    local fullName, firstName, playerClass
+    if hist.myWins.active then
+        fullName, firstName = ns.GetLootPlayerNames("player")
+        local _, class = UnitClass("player")
+        playerClass = class
+    end
     for i = entries and #entries or 0, 1, -1 do
         local e = entries[i]
-        if not hist.myWins.active or ns.History.IsPlayerWin(e, fullName, firstName) then
+        if not hist.myWins.active or ns.History.IsPlayerWin(e, fullName, firstName, playerClass) then
             local key = e.visit and e.visit.id or (e.legacy and "legacy" or "outside")
             local group = byVisit[key]
             if not group then

@@ -72,6 +72,29 @@ assert(History.Import(ambigDB, {days = {[day] = {{
     },
 }}}}, dateKey))
 assert(ambigDB.days[day][1].winnerType == nil)
+assert(not History.IsPlayerWin(ambigDB.days[day][1], "Same Surname", "Same"),
+    "duplicate imported bare names cannot identify the current character")
+assert(History.IsPlayerWin(entries[1], "Маг-Реалм", "Маг"),
+    "an unambiguous imported full name should match")
+assert(History.IsPlayerWin({done = true, legacy = true, winner = "Self"}, "Self Surname", "Self"),
+    "a unique bare name remains usable in older imports")
+assert(not History.IsPlayerWin({done = true, ambiguous = true, winner = "Self"}, "Self Surname", "Self"))
+assert(not History.IsPlayerWin({done = true, allpassed = true, winner = "Self Surname"}, "Self Surname", "Self"))
+assert(not History.IsPlayerWin({done = true, winner = "Self Surname", rolls = {
+    {name = "Self Surname"}, {name = "Self Surname"},
+}}, "Self Surname", "Self"))
+assert(History.IsPlayerWin({done = true, winner = "Self Surname", rolls = {
+    {name = "Self Surname"}, {name = "Self Other"},
+}}, "Self Surname", "Self"), "a distinct full name resolves a first-name collision")
+assert(not History.IsPlayerWin({done = true, winner = "Self", rolls = {
+    {name = "Self Other"},
+}}, "Self Surname", "Self"))
+assert(not History.IsPlayerWin({done = true, winner = "Self", winnerClass = "MAGE"},
+    "Self Surname", "Self", "PALADIN"), "a known different class rules out a bare-name match")
+assert(not History.IsPlayerWin({done = true, winner = "Self", rolls = {{name = "Self", class = "MAGE"}}},
+    "Self Surname", "Self", "PALADIN"))
+assert(History.IsPlayerWin({done = true, winner = "Self", winnerClass = "PALADIN"},
+    "Self Surname", "Self", "PALADIN"))
 
 local sparseDB = {days = {}}
 local sparseEntry = {
@@ -195,3 +218,6 @@ local unsorted = {movedLater, existing, movedFirst}
 History.NormalizeDays({[day] = unsorted}, dateKey)
 assert(unsorted[1] == movedFirst and unsorted[2] == existing and unsorted[3] == movedLater)
 print("History tests passed")
+assert(not History.IsPlayerWin({done = true, winner = "Self", rolls = {
+    {name = "Self", class = "PALADIN"}, {name = "Self Surname", class = "PALADIN"},
+}}, "Self Surname", "Self", "PALADIN"), "two matching records cannot identify a bare-name winner")

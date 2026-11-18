@@ -40,21 +40,6 @@ local function playerName(value)
     return plainText(linkLabel or uncolored)
 end
 
-function History.IsPlayerWin(entry, fullName, firstName)
-    local winner = entry.done and plainText(entry.winner)
-    if not winner then return false end
-    if fullName and fullName ~= firstName and winner == fullName then return true end
-    if winner ~= firstName then return false end
-    for _, roll in ipairs(entry.rolls or {}) do
-        local name = plainText(roll.name)
-        if name and name ~= winner and name ~= fullName
-            and addon.RollDisplay.ShortName(name) == firstName then
-            return false
-        end
-    end
-    return true
-end
-
 local function itemLink(value)
     value = clean(value, "string")
     if not value or value:find("%c") then return end
@@ -334,6 +319,32 @@ end
 
 local function firstName(name)
     return name:match("^[^%s%-]+")
+end
+
+function History.IsPlayerWin(entry, fullName, shortName, playerClass)
+    if not clean(entry, "table") or entry.done ~= true or entry.ambiguous or entry.allpassed then return false end
+    local winner = plainText(entry.winner)
+    if not winner then return false end
+    fullName, shortName = plainText(fullName), plainText(shortName)
+    local exact = winner == fullName and fullName ~= shortName
+    if not exact and winner ~= shortName then return false end
+
+    playerClass = plainText(playerClass)
+    local winnerClass = plainText(entry.winnerClass)
+    if not exact and playerClass and winnerClass and winnerClass ~= playerClass then return false end
+    local found = false
+    for _, roll in ipairs(entry.rolls or {}) do
+        local name = plainText(roll.name)
+        if name == winner or (not exact and name and name == fullName) then
+            if found then return false end
+            found = true
+            local class = plainText(roll.class)
+            if not exact and playerClass and class and class ~= playerClass then return false end
+        elseif not exact and name and firstName(name) == shortName then
+            return false
+        end
+    end
+    return true
 end
 
 local function classFromParty(party, name, classColors, unique)

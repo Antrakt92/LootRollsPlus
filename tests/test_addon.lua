@@ -1097,7 +1097,9 @@ do
     local ambiguous = historyEntry(shortTimestamp)
     ambiguous.allpassed, ambiguous.winner = nil, "Self"
     ambiguous.rolls = {{name = "Self-Other", type = "need", value = 42}}
-    for _, entry in ipairs({own, other, ambiguous}) do entries[#entries + 1] = entry end
+    local wrongClass = historyEntry(shortTimestamp)
+    wrongClass.allpassed, wrongClass.winner, wrongClass.winnerClass = nil, "Self", "MAGE"
+    for _, entry in ipairs({own, other, ambiguous, wrongClass}) do entries[#entries + 1] = entry end
     local filter = LootRollsPlusMyWins
     filter:GetScript("OnClick")(filter)
     local rows = {}
@@ -1112,7 +1114,7 @@ do
     filter:GetScript("OnClick")(filter)
     assert(nextVisibleRow(itemScroll.scrollChild), "turning off My wins restores the selected day's rolls")
     selectDate(dateScroll, shortDate)
-    for _ = 1, 3 do table.remove(entries) end
+    for _ = 1, 4 do table.remove(entries) end
 end
 
 for i = 2, 24 do
