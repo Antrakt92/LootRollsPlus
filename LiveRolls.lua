@@ -1,6 +1,28 @@
 local _, ns = ...
 
 local priority = { need = 1, offspec = 2, disenchant = 3, greed = 4, transmog = 5, pass = 6, waiting = 7 }
+local isSecret = issecretvalue or function() return false end
+
+local function read(method, ...)
+    if type(method) ~= "function" then return end
+    local ok, value = pcall(method, ...)
+    if ok and not isSecret(value) then return value end
+end
+
+local function groupUnitsByGUID()
+    local units = {}
+    local function add(unit)
+        local guid = read(UnitGUID, unit)
+        if type(guid) == "string" and guid ~= "" and not units[guid] then units[guid] = unit end
+    end
+    add("player")
+    local raid, count = read(IsInRaid), read(GetNumGroupMembers)
+    if type(raid) == "boolean" and type(count) == "number" and count >= 1 and count <= 40 and count % 1 == 0 then
+        local prefix = raid and "raid" or "party"
+        for i = 1, raid and count or count - 1 do add(prefix .. i) end
+    end
+    return units
+end
 
 local function copyPlayer(raw)
     return { name = raw.name, class = raw.class, choice = raw.state, roll = raw.roll, isSelf = raw.isSelf,
@@ -9,11 +31,31 @@ end
 
 function ns.BuildLiveRolls(rolls, warning, hasSlot)
     local entries = {}
+    local units, levels
+    local function applyWarning(link, player, demo)
+        local guid = player.guid
+        if not demo and player.class and (player.choice == "need" or player.choice == "offspec")
+            and not isSecret(guid) and type(guid) == "string" and guid ~= "" then
+            if not units then units, levels = groupUnitsByGUID(), {} end
+            if levels[guid] == nil then
+                local unit = units[guid]
+                local level = unit and read(UnitLevel, unit)
+                if type(level) == "number" and level > 0 and level < math.huge and level % 1 == 0
+                    and read(UnitGUID, unit) == guid then
+                    levels[guid] = level
+                else
+                    levels[guid] = false
+                end
+            end
+            player.level = levels[guid] or nil
+        end
+        player.warning = warning(link, player)
+    end
     for i, raw in ipairs(rolls) do
         local players, counts, leaders = {}, {}, {}
         for j, player in ipairs(raw.rolls) do
             local row = copyPlayer(player)
-            if warning then row.warning = warning(raw.link, row) end
+            if warning then applyWarning(raw.link, row, raw.demo) end
             row.order = j
             players[j] = row
             counts[row.choice] = (counts[row.choice] or 0) + 1
@@ -30,7 +72,7 @@ function ns.BuildLiveRolls(rolls, warning, hasSlot)
             if #leaders == 2 then break end
         end
         local winner = raw.winner and copyPlayer(raw.winner)
-        if winner and warning then winner.warning = warning(raw.link, winner) end
+        if winner and warning then applyWarning(raw.link, winner, raw.demo) end
         local canInspect = false
         if not raw.ambiguous and raw.link then
             if raw.demo then

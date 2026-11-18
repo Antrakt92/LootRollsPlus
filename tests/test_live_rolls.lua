@@ -1,5 +1,7 @@
 local root = arg[1] or "."
 local ns = {}
+local restricted = {}
+function issecretvalue(value) return value == restricted end
 function GetLocale() return "enUS" end
 assert(loadfile(root .. "/LiveRolls.lua"))("LootRollsPlus", ns)
 
@@ -63,4 +65,52 @@ view = ns.BuildLiveRolls({{id = 906, link = "equippable", rolls = {}, ambiguous 
 assert(not view.canInspect and not checked)
 view = ns.BuildLiveRolls({{id = 907, rolls = {}}}, nil, hasSlot)[1]
 assert(not view.canInspect and not checked)
+
+local rosterScans, levelReads = 0, 0
+local guids = { player = "Self-GUID", party1 = "First-GUID", party2 = "Second-GUID", party3 = restricted,
+    party4 = "Restricted-Level-GUID" }
+local levels = { player = 39, party1 = 40, party2 = 32, party4 = restricted }
+function UnitGUID(unit) return guids[unit] end
+function UnitLevel(unit) levelReads = levelReads + 1; return levels[unit] end
+function IsInRaid() return false end
+function GetNumGroupMembers() rosterScans = rosterScans + 1; return 5 end
+local function classify(_, player)
+    return player.level and player.level >= 40 and "atypical" or nil
+end
+local function vote(guid, state)
+    return {name = "Same Name", class = "PALADIN", state = state or "need", guid = guid}
+end
+ns.BuildLiveRolls({{rolls = {vote("First-GUID", "greed"), vote(restricted), vote(false)}}}, classify)
+assert(rosterScans == 0 and levelReads == 0, "unrelated or restricted choices should not trigger roster reads")
+
+local first, second = vote("First-GUID"), vote("Second-GUID", "offspec")
+local entries = ns.BuildLiveRolls({
+    {rolls = {first, second, vote("Unknown-GUID"), vote("Restricted-Level-GUID"), vote("Self-GUID")}, winner = first},
+    {rolls = {first}},
+}, classify)
+assert(rosterScans == 1 and levelReads == 4, "one roster pass should serve all rolls and the winner, reading each level once")
+local players = entries[1].players
+assert(players[1].level == 40 and players[1].warning == "atypical" and entries[1].winner.warning == "atypical")
+assert(players[2].level == nil and players[3].level == nil, "unknown GUIDs and restricted levels must not borrow a level by name")
+assert(players[4].level == 39 and players[5].level == 32 and not players[5].warning,
+    "different players of the same class can have different armor tiers")
+assert(first.level == nil and second.level == nil, "roster metadata belongs to view copies")
+
+function IsInRaid() return true end
+function GetNumGroupMembers() return 40 end
+guids.raid40, levels.raid40 = "Last-Raid-GUID", 42
+guids.raid12, levels.raid12 = "Self-GUID", 55
+view = ns.BuildLiveRolls({{rolls = {vote("Last-Raid-GUID"), vote("Self-GUID")}}}, classify)[1]
+assert(view.players[1].level == 42 and view.players[2].level == 39,
+    "inspect the last raid slot and prefer the player token for self")
+
+function IsInRaid() return false end
+function GetNumGroupMembers() return 5 end
+function UnitLevel(unit)
+    guids[unit] = "Replacement-GUID"
+    return 40
+end
+view = ns.BuildLiveRolls({{rolls = {first}}}, classify)[1]
+assert(not view.players[1].level and not view.players[1].warning,
+    "a recycled unit token may not supply another player's level")
 print("live roll model and party/raid previews passed")

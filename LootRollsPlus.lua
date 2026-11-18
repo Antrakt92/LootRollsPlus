@@ -1741,10 +1741,16 @@ RenderLiveRolls = function()
             byClass = {}
             warnings[link] = byClass
         end
-        if byClass[player.class] == nil then
-            byClass[player.class] = ClassifyGear(link, player.class, "need") or false
+        local byLevel = byClass[player.class]
+        if not byLevel then
+            byLevel = {}
+            byClass[player.class] = byLevel
         end
-        return byClass[player.class] or nil
+        local level = player.level or 0
+        if byLevel[level] == nil then
+            byLevel[level] = ClassifyGear(link, player.class, "need", player.level) or false
+        end
+        return byLevel[level] or nil
     end
     if liveDemo then
         local demo = liveDemo
