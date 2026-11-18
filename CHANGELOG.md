@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.1 — 18-Nov-2026 — Loot history and live panels
+
+- Keep ambiguous names out of My wins and recover confirmed results when the game briefly returns incomplete or outdated loot data.
+- Keep canceled rolls from reappearing and avoid inspecting a player by name when the game hides the winner's identity.
+- Use verified player levels for live armor warnings and reposition roll panels when the game window changes size.
+- Show when item data is unavailable instead of leaving the tooltip stuck on Loading.
+
 ## 1.3.0 — 17-Nov-2026 — My wins in History
 
 - Filter a day's loot history to the items your current character won.
