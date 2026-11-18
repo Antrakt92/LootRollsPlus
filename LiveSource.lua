@@ -167,10 +167,10 @@ local function readHistory(api, interests, updates, previous, retries, now)
         local allPassed = clean(raw.allPassed, "boolean") == true
         local winningRoll, marked
         if winner or not allPassed then
-            winningRoll, marked = ns.FindWinningLootRoll(raw.rollInfos,
-                winner and clean(winner.playerName, "string"),
-                winner and clean(winner.playerGUID, "string"),
-                winner and clean(winner.playerClass, "string"))
+            local guid = winner and clean(winner.playerGUID, "string")
+            if winner and isSecret(winner.playerGUID) then guid = false end
+            winningRoll, marked = ns.FindWinningLootRoll(raw.rollInfos, winner and clean(winner.playerName, "string"),
+                guid, winner and clean(winner.playerClass, "string"))
         end
         local choices = drops[identity] or {}
         drops[identity] = choices
@@ -310,7 +310,7 @@ function Source:Refresh(scanHistory)
     local api = clean(_G.C_LootHistory, "table") or {}
     local historyTime = number(read(api.GetLootHistoryTime))
     local now = number(read(_G.GetTime)) or 0
-    local slots, ids, interests, owners = {}, {}, {}, {}
+    local slots, ids, interests, owners, reportedCancelled = {}, {}, {}, {}, {}
     local missingIdentity = false
 
     local function observe(id, anchor, duration)
@@ -318,7 +318,11 @@ function Source:Refresh(scanHistory)
             missingIdentity = true
             return
         end
-        if self.cancelled[id] or ids[id] then return end
+        if self.cancelled[id] then
+            reportedCancelled[id] = true
+            return
+        end
+        if ids[id] then return end
         ids[id] = true
         local observation = self.observations[id] or {}
         self.observations[id] = observation
@@ -361,7 +365,9 @@ function Source:Refresh(scanHistory)
         -- Bonus-roll frames also use the container but do not have a rollID.
         local rawID = anchor.rollID
         local id = key(rawID)
-        if isSecret(rawID) or (rawID ~= nil and (not id or not self.cancelled[id])) then
+        if id and self.cancelled[id] then
+            reportedCancelled[id] = true
+        elseif isSecret(rawID) or rawID ~= nil then
             hasRollFrame = true
             local visible = frameVisible(anchor)
             local observation = observe(id, visible and anchor, number(anchor.rollTime))
@@ -373,7 +379,7 @@ function Source:Refresh(scanHistory)
     for _, queued in ipairs(queue) do
         if clean(queued, "table") then observe(key(queued.rollID), nil, number(queued.rollTime)) end
     end
-    if next(active) or next(self.observations) then
+    if next(active) or next(self.observations) or next(self.cancelled) then
         local rollIDs = clean(read(_G.GetActiveLootRollIDs), "table") or {}
         for _, id in ipairs(rollIDs) do observe(key(id)) end
         for id, observation in pairs(self.observations) do
@@ -467,7 +473,7 @@ function Source:Refresh(scanHistory)
     local force = self.forceRefresh or layoutChanged
     self.forceRefresh = false
     self:Publish(snapshot, force)
-    return hasRollFrame or next(self.observations) ~= nil
+    return hasRollFrame or next(self.observations) ~= nil, reportedCancelled
 end
 
 function Source:Reset()
@@ -550,6 +556,16 @@ function Source:OnEvent(event, first, second)
         local previous, cancelled = self.observations, self.cancelled
         self:Reset()
         for id in pairs(previous) do cancelled[id] = true end
+        for id in pairs(readActiveRollSet() or {}) do cancelled[id] = true end
+        local container = clean(_G.GroupLootContainer, "table") or {}
+        local function cancelReportedRolls(rolls)
+            for _, roll in pairs(clean(rolls, "table") or {}) do
+                local id = clean(roll, "table") and key(roll.rollID)
+                if id then cancelled[id] = true end
+            end
+        end
+        cancelReportedRolls(container.rollFrames)
+        cancelReportedRolls(container.waitingRolls)
         self.cancelled = cancelled
         self:Publish({})
     elseif event == "LOOT_HISTORY_CLEAR_HISTORY" then
@@ -592,8 +608,10 @@ function Source:Start(onChange, initiallyEnabled)
         elapsed = 0
         local dirty = self.dirty
         self.dirty = false
-        if not self:Refresh(dirty) then
-            self.cancelled, self.updates = {}, {}
+        local active, reportedCancelled = self:Refresh(dirty)
+        if not active then
+            -- Blizzard can continue reporting a cancelled popup during a later wake.
+            self.cancelled, self.updates = reportedCancelled, {}
             self.disabledAmbiguity = nil
             frame:Hide()
         end

@@ -719,6 +719,22 @@ known.playerGUID = "Player-Known"
 emitDrop(engine, 21)
 assert(engine:GetParticipantGUID(remembered, "Unique") == "Player-Known",
     "an authoritative winner with a unique name can be identified even when omitted from participants")
+bound.winner = { playerName = "Unique", playerGUID = secret }
+emitDrop(engine, 21)
+assert(engine:GetParticipantGUID(remembered, "Unique") == false,
+    "a winner's restricted GUID must not authorize an inspection by name when the participant array omits them")
+bound.rollInfos = {known, otherParticipant}
+emitDrop(engine, 21)
+assert(engine:GetParticipantGUID(remembered, "Unique") == false,
+    "an unmarked same-name participant cannot bypass a winner's restricted GUID")
+bound.winner = nil
+emitDrop(engine, 21)
+assert(engine:GetParticipantGUID(remembered, "Unique") == false,
+    "an update that omits the winner cannot restore a restricted binding")
+bound.winner = known
+emitDrop(engine, 21)
+assert(engine:GetParticipantGUID(remembered, "Unique") == "Player-Known",
+    "a clean authoritative winner update can restore the participant binding")
 otherParticipant.playerName = secret
 emitDrop(engine, 21)
 assert(not engine:GetParticipantGUID(remembered, "Unique"), "a hidden participant cannot establish unique name ownership")
@@ -825,5 +841,61 @@ correctedWinner = knownWinner(48)
 correctedWinner.roll = 0
 emitDrop(engine, 48)
 assert(row[1].winnerValue == nil, "an explicit invalid score is different from a masked score")
+
+setDrops()
+engine = new()
+engine:Start()
+local terminalVote = roll("Priest", "PRIEST", 3, 87)
+local terminalDrop = drop(250, clock, {terminalVote})
+setDrops(terminalDrop)
+emitDrop(engine, 250)
+assert(#row == 1 and not row[1].done)
+terminalDrop.winner = terminalVote
+local readDrop = C_LootHistory.GetSortedInfoForDrop
+C_LootHistory.GetSortedInfoForDrop = function() error("history temporarily unavailable") end
+emitDrop(engine, 250)
+assert(not row[1].done)
+C_LootHistory.GetSortedInfoForDrop = readDrop
+setDrops(drop(250, clock - 1))
+emitDrop(engine, 250)
+setDrops(terminalDrop)
+advance(1)
+assert(row[1].done and row[1].winnerValue == 87,
+    "a transient read failure must recover the final result even if an older generation is replayed first")
+
+advance(1)
+local previousDrop = drop(251, clock)
+setDrops(previousDrop)
+emitDrop(engine, 251)
+local attempts = 0
+C_LootHistory.GetSortedInfoForDrop = function()
+    attempts = attempts + 1
+    return nil
+end
+emitDrop(engine, 251)
+emitDrop(engine, 251)
+for _ = 1, 8 do advance(0.5) end
+assert(attempts == 6, "repeated failed events must share a bounded retry")
+emitDrop(engine, 251)
+local recycledDrop = drop(251, clock, {terminalVote}, terminalVote)
+setDrops(recycledDrop)
+C_LootHistory.GetSortedInfoForDrop = readDrop
+advance(0.5)
+assert(#row == 2 and not row[2].done, "an old retry must not ingest a recycled key's new generation")
+emitDrop(engine, 251)
+assert(#row == 3 and row[3].winnerValue == 87, "a new event can confirm the recycled key")
+
+setDrops()
+engine = new()
+engine:Start()
+local incompleteDrop = drop(252, clock, {terminalVote})
+setDrops(incompleteDrop)
+emitDrop(engine, 252)
+local originalStart = incompleteDrop.startTime
+incompleteDrop.winner, incompleteDrop.startTime = terminalVote, nil
+emitDrop(engine, 252)
+incompleteDrop.startTime = originalStart
+advance(0.5)
+assert(row[1].done and row[1].winnerValue == 87, "a partially populated update must retry the same tracked roll")
 
 print("Capture tests passed")

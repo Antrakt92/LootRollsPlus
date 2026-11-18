@@ -241,6 +241,12 @@ emit("LOOT_HISTORY_UPDATE_DROP", 77, 19)
 advance()
 assert(expect(source, 123).winner.state == "need" and expect(source, 123).winner.roll == 96,
     "a uniquely matched native vote can fill both fields when the winner omits the choice")
+current.winner = {playerName = "Mage", playerGUID = secret}
+emit("LOOT_HISTORY_UPDATE_DROP", 77, 19)
+advance()
+local protectedWinner = expect(source, 123).winner
+assert(protectedWinner and protectedWinner.guid == false and not protectedWinner.roll and not protectedWinner.state,
+    "an unmarked same-name participant cannot enrich a winner whose identity is explicitly restricted")
 
 -- A different popup can immediately reuse the same Blizzard frame object.
 emit("CANCEL_LOOT_ROLL", 123)
@@ -503,5 +509,22 @@ for _, ordering in ipairs({"start", "cancel", "prune", "restricted", "restricted
             "a restricted active roll list cannot prove the old popup is gone")
     end
 end
+
+reset()
+source = newSource()
+local cancelledFrame = popup(905, 1, link)
+drops[77] = {drop(29, clock, link, {need})}
+emit("CANCEL_ALL_LOOT_ROLLS")
+advance()
+assert(not lookup(source, 905), "cancel-all must cover a popup not yet observed by the refresh loop")
+popup(906, 2, link)
+rolls[905] = nil
+drops[77] = {drop(30, clock, link, {offspec})}
+emit("START_LOOT_ROLL", 906, 60000)
+emit("LOOT_HISTORY_UPDATE_DROP", 77, 30)
+advance()
+assert(not lookup(source, 905) and expect(source, 906).rolls[1].name == "Paladin",
+    "a later START must neither resurrect a still-visible cancelled frame nor let it spoil the new attribution")
+cancelledFrame:Hide()
 
 print("Live source timing, attribution, privacy, and lifecycle tests passed")

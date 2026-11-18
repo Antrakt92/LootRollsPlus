@@ -14,6 +14,8 @@ ns.CaptureEvents = {
 local isSecret = _G.issecretvalue or function() return false end
 local START_TOLERANCE = 2
 local LATE_CHAT_GRACE = 2
+local DROP_RETRY_INTERVAL = 0.5
+local DROP_READ_RETRIES = 4
 
 local function clean(value, expectedType)
     if isSecret(value) or type(value) ~= expectedType then return nil end
@@ -169,7 +171,7 @@ function ns.FindWinningLootRoll(rawRolls, winnerName, winnerGUID, winnerClass)
                 marked = raw
             end
             if (winnerGUID and guid == winnerGUID)
-                or (name and name == winnerName and (not winnerGUID or not guid)) then
+                or (winnerGUID ~= false and name and name == winnerName and (not winnerGUID or not guid)) then
                 duplicateName = duplicateName or matched ~= nil
                 matched = raw
             elseif not name and (not winnerGUID or not guid) then
@@ -193,7 +195,7 @@ end
 local function bindParticipantGUIDs(rawRolls, winnerName, winnerGUID)
     if isSecret(rawRolls) then return false end
     if not clean(rawRolls, "table") then
-        if winnerName and winnerGUID then return { [winnerName] = winnerGUID } end
+        if winnerName and winnerGUID ~= nil then return { [winnerName] = winnerGUID } end
         return nil
     end
     local bindings, names = {}, {}
@@ -208,7 +210,7 @@ local function bindParticipantGUIDs(rawRolls, winnerName, winnerGUID)
         end
         names[name] = true
     end
-    if winnerName and winnerGUID then
+    if winnerName and winnerGUID ~= nil then
         local current = bindings[winnerName]
         if current == nil then
             bindings[winnerName] = winnerGUID
@@ -814,6 +816,7 @@ function ns.NewCapture(callbacks)
                 or (captureStart and startTime < captureStart))
         end
         if slot.ignored then return end
+        slot.readRetry = nil
         local previous = slot.entry
         local isNew = previous == nil
         local wasDone = previous and previous.done
@@ -842,14 +845,21 @@ function ns.NewCapture(callbacks)
         local allpassed = clean(raw.allPassed, "boolean") == true
         local winnerName = winnerInfo and nonempty(winnerInfo.playerName)
         local winnerClass = winnerInfo and nonempty(winnerInfo.playerClass)
+        local winnerGUID = winnerInfo and nonempty(winnerInfo.playerGUID)
+        local restrictedWinner = winnerInfo and isSecret(winnerInfo.playerGUID)
         local winningRoll
         if winnerInfo or not allpassed then
-            winningRoll = ns.FindWinningLootRoll(raw.rollInfos, winnerName,
-                winnerInfo and nonempty(winnerInfo.playerGUID), winnerClass)
+            if restrictedWinner then
+                winningRoll = ns.FindWinningLootRoll(raw.rollInfos, winnerName, false, winnerClass)
+            else
+                winningRoll = ns.FindWinningLootRoll(raw.rollInfos, winnerName, winnerGUID, winnerClass)
+            end
         end
         local presentationWinner = winningRoll
         if not presentationWinner and not winnerInfo and not allpassed and entry.winner then
-            presentationWinner = ns.FindWinningLootRoll(raw.rollInfos, entry.winner, slot.winnerGUID, entry.winnerClass)
+            local presentationGUID = slot.winnerGUID
+            if slot.blockedWinner == entry.winner then presentationGUID = false end
+            presentationWinner = ns.FindWinningLootRoll(raw.rollInfos, entry.winner, presentationGUID, entry.winnerClass)
         end
         local wasActive = slot.expiry ~= nil
         local changed = observeNativeActivity(slot, raw, winnerInfo ~= nil or winningRoll ~= nil or allpassed) or isNew
@@ -870,12 +880,13 @@ function ns.NewCapture(callbacks)
 
         local winner, winnerState = readRoll(winnerInfo, states)
         local winnerValue = winnerInfo and rollValue(winnerInfo.roll)
-        local winnerGUID
         if winnerInfo or winningRoll then
             local winnerType = winner and winner.type
             local scoreMissing = missingRollValue(winnerInfo)
-            winnerGUID = (winnerInfo and nonempty(winnerInfo.playerGUID))
-                or (winningRoll and nonempty(winningRoll.playerGUID))
+            if not restrictedWinner and not winnerGUID and winningRoll then
+                winnerGUID = nonempty(winningRoll.playerGUID)
+                restrictedWinner = isSecret(winningRoll.playerGUID)
+            end
             if winningRoll then
                 local fallback, fallbackState = readRoll(winningRoll, states)
                 winnerName = winnerName or nonempty(winningRoll.playerName)
@@ -938,7 +949,16 @@ function ns.NewCapture(callbacks)
         -- Store current player identities on the capture engine, outside SavedVariables.
         local bindings = false
         if not isSecret(raw.winner) then
-            bindings = bindParticipantGUIDs(raw.rollInfos, winnerName, winnerGUID)
+            if restrictedWinner then
+                slot.blockedWinner = winnerName or entry.winner
+            elseif winnerGUID or (winnerName and winnerName ~= slot.blockedWinner) then
+                slot.blockedWinner = nil
+            end
+            if slot.blockedWinner then
+                bindings = bindParticipantGUIDs(raw.rollInfos, slot.blockedWinner, false)
+            else
+                bindings = bindParticipantGUIDs(raw.rollInfos, winnerName, winnerGUID)
+            end
         end
         local bindingsChanged = not sameBindings(participantGUIDs[entry], bindings)
         participantGUIDs[entry] = bindings
@@ -960,6 +980,37 @@ function ns.NewCapture(callbacks)
             local lootListKey = drop and id(drop.lootListKey)
             if lootListKey then snapshotDrop(encounterID, lootListKey, drop, sourceName, baseline, drops) end
         end
+    end
+
+    local function readUpdatedDrop(encounterID, lootListKey)
+        local drop = clean(read(api.GetSortedInfoForDrop, encounterID, lootListKey), "table")
+        if not drop or id(drop.lootListKey) ~= lootListKey then return end
+        local startTime = clean(drop.startTime, "number")
+        local _, identity = itemLink(drop.itemHyperlink)
+        if startTime and identity then return drop, startTime, identity end
+    end
+
+    local function retryDropUpdate(encounterID, lootListKey, slot)
+        if not canSchedule or not slot or slot.ignored or slot.readRetry then return end
+        local retry = {}
+        local remaining = DROP_READ_RETRIES
+        slot.readRetry = retry
+        local function refresh()
+            if slot.readRetry ~= retry or not seen[encounterID] or seen[encounterID][lootListKey] ~= slot then return end
+            local drop, startTime, identity = readUpdatedDrop(encounterID, lootListKey)
+            if drop then
+                slot.readRetry = nil
+                if startTime == slot.startTime and identity == slot.identity then
+                    snapshotDrop(encounterID, lootListKey, drop, getSourceName(encounterID), false)
+                end
+            elseif remaining > 1 then
+                remaining = remaining - 1
+                _G.C_Timer.After(DROP_RETRY_INTERVAL, refresh)
+            else
+                slot.readRetry = nil
+            end
+        end
+        _G.C_Timer.After(DROP_RETRY_INTERVAL, refresh)
     end
 
     local function baseline()
@@ -1040,8 +1091,12 @@ function ns.NewCapture(callbacks)
         elseif event == "LOOT_HISTORY_UPDATE_DROP" then
             local lootListKey = id(arg2)
             if not lootListKey then return end
-            local drop = clean(read(api.GetSortedInfoForDrop, encounterID, lootListKey), "table")
-            if not drop or id(drop.lootListKey) ~= lootListKey then return end
+            local drop = readUpdatedDrop(encounterID, lootListKey)
+            local slot = seen[encounterID] and seen[encounterID][lootListKey]
+            if not drop then
+                retryDropUpdate(encounterID, lootListKey, slot)
+                return
+            end
             snapshotDrop(encounterID, lootListKey, drop, getSourceName(encounterID), false)
         end
     end
