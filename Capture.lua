@@ -998,7 +998,7 @@ function ns.NewCapture(callbacks)
         local function refresh()
             if slot.readRetry ~= retry or not seen[encounterID] or seen[encounterID][lootListKey] ~= slot then return end
             local drop, startTime, identity = readUpdatedDrop(encounterID, lootListKey)
-            if drop then
+            if drop and startTime >= slot.startTime then
                 slot.readRetry = nil
                 if startTime == slot.startTime and identity == slot.identity then
                     snapshotDrop(encounterID, lootListKey, drop, getSourceName(encounterID), false)

@@ -895,6 +895,10 @@ local originalStart = incompleteDrop.startTime
 incompleteDrop.winner, incompleteDrop.startTime = terminalVote, nil
 emitDrop(engine, 252)
 incompleteDrop.startTime = originalStart
+setDrops(drop(252, clock - 1))
+advance(0.5)
+assert(not row[1].done, "a stale native revision cannot finish the current roll")
+setDrops(incompleteDrop)
 advance(0.5)
 assert(row[1].done and row[1].winnerValue == 87, "a partially populated update must retry the same tracked roll")
 
