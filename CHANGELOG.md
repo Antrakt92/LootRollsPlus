@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.2 — 19-Nov-2026 — AddOns list
+
+- Show Loot Rolls Plus under Antrakt92 in the in-game AddOns list.
+
 ## 1.3.1 — 18-Nov-2026 — Loot history and live panels
 
 - Keep ambiguous names out of My wins and recover confirmed results when the game briefly returns incomplete or outdated loot data.
