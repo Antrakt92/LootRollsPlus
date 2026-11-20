@@ -148,7 +148,7 @@ local function deferHistoryRead(retries, encounter, lootKey, previousDeadline, n
     end
 end
 
-local function readHistory(api, interests, updates, previous, retries, now)
+local function readHistory(api, interests, bindings, updates, previous, retries, now)
     local drops = previous or {}
     for identity in pairs(drops) do
         if not interests[identity] then drops[identity] = nil end
@@ -158,11 +158,17 @@ local function readHistory(api, interests, updates, previous, retries, now)
         local lootKey = key(raw.lootListKey)
         local identity = itemLink(raw.itemHyperlink)
         local start = number(raw.startTime)
+        if not lootKey then return end
+        local historyKey = encounter .. ":" .. lootKey
+        local binding = bindings[historyKey]
+        -- A key's item cannot change within one generation. Retry an
+        -- unreadable or older generation as well.
+        if binding and (not start or not identity or start < binding.historyStart
+            or (start == binding.historyStart and identity ~= binding.identity)) then return false end
         local popupStart = identity and interests[identity]
-        if not lootKey or not popupStart or not start or math.abs(start - popupStart) > START_TOLERANCE then
+        if not start or not popupStart or math.abs(start - popupStart) > START_TOLERANCE then
             return
         end
-        local historyKey = encounter .. ":" .. lootKey
         local winner = clean(raw.winner, "table")
         local allPassed = clean(raw.allPassed, "boolean") == true
         local winningRoll, marked
@@ -190,8 +196,11 @@ local function readHistory(api, interests, updates, previous, retries, now)
     local function scan(encounter)
         local rows = clean(read(api.GetSortedDropsForEncounter, encounter), "table")
         if not rows then return false end
-        for _, row in ipairs(rows) do collect(encounter, row) end
-        return true
+        local complete = true
+        for _, row in ipairs(rows) do
+            if collect(encounter, row) == false then complete = false end
+        end
+        return complete
     end
     if not previous then
         local visited = { [0] = true }
@@ -218,9 +227,7 @@ local function readHistory(api, interests, updates, previous, retries, now)
         end
         for lootKey, deadline in pairs(update.keys) do
             local raw = clean(read(api.GetSortedInfoForDrop, encounter, lootKey), "table")
-            if raw and key(raw.lootListKey) == lootKey then
-                collect(encounter, raw)
-            else
+            if not raw or key(raw.lootListKey) ~= lootKey or collect(encounter, raw) == false then
                 deferHistoryRead(retries, encounter, lootKey, deadline, now)
             end
         end
@@ -411,7 +418,16 @@ function Source:Refresh(scanHistory)
         queueDueHistoryRetries(self.historyRetries, self.updates, now)
         if scanHistory or identityChanged or warmingUp or next(self.updates) then
             local previous = not scanHistory and not identityChanged and not warmingUp and self.history or nil
-            self.history = readHistory(api, interests, self.updates, previous, self.historyRetries, now)
+            local bindings = {}
+            for _, observation in pairs(self.observations) do
+                if observation.historyKey then
+                    local prior = bindings[observation.historyKey]
+                    if not prior or prior.historyStart < observation.historyStart then
+                        bindings[observation.historyKey] = observation
+                    end
+                end
+            end
+            self.history = readHistory(api, interests, bindings, self.updates, previous, self.historyRetries, now)
             self.updates = {}
             if warmingUp then self.warmupAt = now + HISTORY_RETRY_INTERVAL end
         end

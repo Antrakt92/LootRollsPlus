@@ -406,6 +406,62 @@ emit("LOOT_HISTORY_UPDATE_DROP", 77, 17)
 advance()
 assert(#expect(source, 601).rolls == 1, "a later event can recover after the retry window")
 
+for _, event in ipairs({"LOOT_HISTORY_UPDATE_DROP", "LOOT_HISTORY_UPDATE_ENCOUNTER"}) do
+    reset()
+    local startedAt = clock
+    local originalAnchor = popup(607, 1, link)
+    popup(608, 2, separate)
+    local currentDrop = drop(17, startedAt, link, {need})
+    local otherDrop = drop(18, startedAt, separate, {offspec})
+    drops[77] = {currentDrop, otherDrop}
+    source = newSource()
+    assert(#expect(source, 607).rolls == 1)
+    advance(3)
+    drops[77] = {drop(17, startedAt - 1, link, {offspec}), otherDrop}
+    emit(event, 77, 17)
+    advance()
+    local stale = expect(source, 607)
+    assert(not stale.ambiguous and #stale.rolls == 0, "an older generation must not change the live binding")
+    drops[77] = {currentDrop, otherDrop}
+    advance(0.6)
+    assert(expect(source, 607).rolls[1].name == "Mage", "a stale history update must recover on retry")
+
+    for _, field in ipairs({"itemHyperlink", "startTime"}) do
+        local restrictedDrop = drop(17, startedAt, link, {offspec})
+        restrictedDrop[field] = secret
+        drops[77] = {restrictedDrop, otherDrop}
+        emit(event, 77, 17)
+        advance()
+        local restricted = expect(source, 607)
+        assert(not restricted.ambiguous and #restricted.rolls == 0, "hide votes from an unreadable bound drop")
+        drops[77] = {currentDrop, otherDrop}
+        advance(0.6)
+        local recovered = expect(source, 607)
+        assert(#recovered.rolls == 1 and recovered.rolls[1].name == "Mage", "retry a bound drop with unreadable " .. field)
+    end
+
+    if event == "LOOT_HISTORY_UPDATE_ENCOUNTER" then originalAnchor:Hide() end
+    drops[77] = {drop(17, startedAt, separate, {need}), otherDrop}
+    emit(event, 77, 17)
+    advance()
+    local unaffected = expect(source, 608)
+    assert(not unaffected.ambiguous and #unaffected.rolls == 1 and unaffected.rolls[1].name == "Paladin",
+        "a mismatched read of a bound key must not interfere with a different active item")
+    drops[77] = {currentDrop, otherDrop}
+    originalAnchor:Show()
+    advance(0.6)
+    assert(expect(source, 607).rolls[1].name == "Mage", "retry a bound key when its item changes without a new start")
+
+    drops[77] = {drop(17, startedAt + 1, link, {offspec}), otherDrop}
+    emit(event, 77, 17)
+    advance()
+    drops[77] = {currentDrop, otherDrop}
+    emit(event, 77, 17)
+    advance()
+    local conflict = expect(source, 607)
+    assert(conflict.ambiguous and #conflict.rolls == 0, "a newer conflicting generation must stay quarantined")
+end
+
 reset()
 popup(701, 1, link)
 popup(702, 2, separate)

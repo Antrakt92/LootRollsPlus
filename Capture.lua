@@ -658,6 +658,20 @@ function ns.NewCapture(callbacks)
             and (not parsed.value or not entry.winnerValue or entry.winnerValue == parsed.value)
     end
 
+    local function repeatsCompletedChat(slots, message, parsed, observedAt)
+        local terminal = parsed.kind == "allpassed" or parsed.kind == "won"
+        if not terminal and not parsed.value then return false end
+        for _, slot in pairs(slots) do
+            -- Completed chat slots retain a short grace period for native reconciliation.
+            if slot.entry.done and observedAt <= slot.expires then
+                local prior = slot.completionMessage
+                if not terminal then prior = slot.scoreMessages and slot.scoreMessages[parsed.player] end
+                if prior == message then return true end
+            end
+        end
+        return false
+    end
+
     local function handleLootChat(message)
         local parsed = parseChat(chatRules, message)
         if not parsed then return end
@@ -711,13 +725,14 @@ function ns.NewCapture(callbacks)
             end
         end
         if parsed.kind == "allpassed" then
-            if recentlyClosed then return end
+            if recentlyClosed or repeatsCompletedChat(slots, message, parsed, observedAt) then return end
             entry.done, entry.allpassed, entry.closed = true, true, nil
         elseif not parsed.player then
             return
         else
             local class, level, fullName = groupMember(parsed.player)
             parsed.player = fullName or parsed.player
+            if repeatsCompletedChat(slots, message, parsed, observedAt) then return end
             local roll = findChatRoll(entry, parsed.player)
             if parsed.kind == "won" then
                 if recentlyClosed then
@@ -767,10 +782,14 @@ function ns.NewCapture(callbacks)
             end
         end
         if entry.done then
-            target.expires = math.min(target.expires, observedAt + 2)
-            _G.C_Timer.After(3, function()
+            target.completionMessage = message
+            target.expires = math.min(target.expires, observedAt + LATE_CHAT_GRACE)
+            _G.C_Timer.After(LATE_CHAT_GRACE + 1, function()
                 if chatByID[target.id] == target then removeChatSlot(target) end
             end)
+        elseif parsed.value then
+            target.scoreMessages = target.scoreMessages or {}
+            target.scoreMessages[parsed.player] = message
         end
         callbacks.onDrop(entry, false)
     end
@@ -998,11 +1017,10 @@ function ns.NewCapture(callbacks)
         local function refresh()
             if slot.readRetry ~= retry or not seen[encounterID] or seen[encounterID][lootListKey] ~= slot then return end
             local drop, startTime, identity = readUpdatedDrop(encounterID, lootListKey)
-            if drop and startTime >= slot.startTime then
+            if drop and startTime > slot.startTime then
                 slot.readRetry = nil
-                if startTime == slot.startTime and identity == slot.identity then
-                    snapshotDrop(encounterID, lootListKey, drop, getSourceName(encounterID), false)
-                end
+            elseif drop and startTime == slot.startTime and identity == slot.identity then
+                snapshotDrop(encounterID, lootListKey, drop, getSourceName(encounterID), false)
             elseif remaining > 1 then
                 remaining = remaining - 1
                 _G.C_Timer.After(DROP_RETRY_INTERVAL, refresh)
@@ -1091,9 +1109,10 @@ function ns.NewCapture(callbacks)
         elseif event == "LOOT_HISTORY_UPDATE_DROP" then
             local lootListKey = id(arg2)
             if not lootListKey then return end
-            local drop = readUpdatedDrop(encounterID, lootListKey)
+            local drop, startTime, identity = readUpdatedDrop(encounterID, lootListKey)
             local slot = seen[encounterID] and seen[encounterID][lootListKey]
-            if not drop then
+            if not drop or (slot and (startTime < slot.startTime
+                or (startTime == slot.startTime and identity ~= slot.identity))) then
                 retryDropUpdate(encounterID, lootListKey, slot)
                 return
             end
