@@ -13,7 +13,7 @@ local db    -- LootRollsPlusDB: ajustes de la cuenta (posicion, opciones)
 local days  -- LootRollsPlusCharDB.days: historial de este personaje
 local charDB, visits, capture
 local refresh, queueRefresh, toggleDetails, UpdateVisibility
-local RenderLiveRolls
+local RenderLiveRolls, PlaceComparison
 local hoverRow
 local worldReady
 local comparisonNeedsItem
@@ -209,7 +209,9 @@ local function ClearItemRequest(link)
 end
 
 local function RequestItemData(link)
-    if not pendingItems[link] and pendingItemCount < MAX_PENDING_ITEMS and Item and type(Item.CreateFromItemLink) == "function" then
+    if pendingItems[link] then return pendingItems[link] end
+    if pendingItemCount >= MAX_PENDING_ITEMS then return nil, true end
+    if Item and type(Item.CreateFromItemLink) == "function" then
         local created, item = pcall(Item.CreateFromItemLink, Item, link)
         if created and not isSecret(item) and type(item) == "table" and type(item.ContinueOnItemLoad) == "function" then
             local request = {}
@@ -228,7 +230,9 @@ local function RequestItemData(link)
                 C_Timer.After(15, function()
                     if pendingItems[link] ~= request then return end
                     ClearItemRequest(link)
-                    if comparisonNeedsItem and comparisonNeedsItem(link, request) then queueRefresh() end
+                    if comparisonNeedsItem and (comparisonNeedsItem(link, request) or comparisonNeedsItem()) then
+                        queueRefresh()
+                    end
                 end)
             end
         end
@@ -685,6 +689,7 @@ main:SetScript("OnSizeChanged", function(_, _, height)
         main.history:SetHeight(height)
         return
     end
+    if PlaceComparison then PlaceComparison(main) end
     if not sizing then return end
     local rows = FitRows(height)
     if rows == dragRows then return end
@@ -1125,27 +1130,33 @@ local function ShowComparisonTooltip(tooltip, link, status, disenchant)
     end
     if loaded == false then
         tooltip.shownLink = nil
-        if tooltip.requestedLink ~= link then
+        if tooltip.requestedLink ~= link or tooltip.waitingForCapacity then
             tooltip.requestedLink = link
-            RequestItemData(link)
+            local _, full = RequestItemData(link)
+            tooltip.waitingForCapacity = full
         end
         tooltip:SetOwner(details, "ANCHOR_NONE")
-        local message = pendingItems[link] and Label("Loading item…", "Загрузка предмета…")
+        local message = (pendingItems[link] or tooltip.waitingForCapacity) and Label("Loading item…", "Загрузка предмета…")
             or Label("Item data unavailable", "Данные предмета недоступны")
         tooltip:SetText(message, 1, 1, 1, 1, true)
     else
-        tooltip.requestedLink = nil
+        tooltip.requestedLink, tooltip.waitingForCapacity = nil, nil
     end
     tooltip:Show()
 end
 
 local detailEntry, detailDisenchant, detailPriceRetry, liveComparison
 local inspector = ns.NewInspect()
-local selectedPlayer, selectedClass, inspectionState
+local selectedPlayer, selectedClass, inspectionState, inspectionAttempt
 comparisonNeedsItem = function(link, request)
-    return details:IsShown() and (detailPriceRetry == request
+    if not details:IsShown() then return false end
+    if not link then
+        return droppedTooltip.waitingForCapacity or equippedTooltip.waitingForCapacity
+            or (inspectionAttempt and inspectionAttempt.waitingForCapacity)
+    end
+    return detailPriceRetry == request
         or droppedTooltip.requestedLink == link or equippedTooltip.requestedLink == link
-        or (inspectionState == "itemPending" and detailEntry and detailEntry.link == link))
+        or (inspectionState == "itemPending" and detailEntry and detailEntry.link == link)
 end
 local inspectedGUIDs = setmetatable({}, { __mode = "k" })
 local inspectionReplacements = setmetatable({}, {__mode = "k"})
@@ -1156,11 +1167,13 @@ end)
 details:SetScript("OnHide", function(self)
     self:UnregisterEvent("GLOBAL_MOUSE_DOWN")
     detailEntry, selectedPlayer, selectedClass, inspectionState = nil, nil, nil, nil
+    inspectionAttempt = nil
     detailDisenchant, detailPriceRetry = nil, nil
     liveComparison = nil
     droppedTooltip:Hide()
     equippedTooltip:Hide()
     droppedTooltip.requestedLink, equippedTooltip.requestedLink = nil, nil
+    droppedTooltip.waitingForCapacity, equippedTooltip.waitingForCapacity = nil, nil
     equippedTooltip.snapshot, equippedTooltip.slot, equippedTooltip.canSwitchSlot = nil, nil, nil
 end)
 
@@ -1251,8 +1264,8 @@ local function PlaceLiveEquipped(anchor, card, roster)
     return Try(x, highest + gap + height) or (bottom and Try(x, bottom - gap))
 end
 
-local function PlaceComparison()
-    if not detailAnchor or not details:IsShown() then return end
+PlaceComparison = function(anchor)
+    if not detailAnchor or (anchor and detailAnchor ~= anchor) or not details:IsShown() then return end
     if liveComparison then
         local screenCoordinate = ns.LiveView.ScreenCoordinate
         local right = screenCoordinate(detailAnchor, "GetRight")
@@ -1273,14 +1286,37 @@ local function PlaceComparison()
     local left, screenWidth = detailAnchor:GetLeft(), UIParent:GetWidth()
     local leftWidth, rightWidth = droppedTooltip:GetWidth(), equippedTooltip:GetWidth()
     leftWidth, rightWidth = finite(leftWidth) and leftWidth or 0, finite(rightWidth) and rightWidth or 0
+    local position = PlayerListPosition()
+    local below, top, screenHeight = detailAnchor:GetBottom(), detailAnchor:GetTop(), UIParent:GetHeight()
+    local dropHeight, equippedHeight = droppedTooltip:GetHeight(), equippedTooltip:GetHeight()
     if finite(left) and finite(screenWidth) and leftWidth + rightWidth + 16 <= screenWidth then
         offset = math.max(leftWidth + 8 - left, math.min(screenWidth - rightWidth - 8 - left, offset))
+    elseif finite(left) and finite(screenWidth) and leftWidth > 0 and rightWidth > 0
+        and finite(below) and finite(top) and finite(screenHeight)
+        and finite(dropHeight) and dropHeight > 0 and finite(equippedHeight) and equippedHeight > 0 then
+        local stackWidth = math.max(leftWidth, rightWidth)
+        local stackHeight = dropHeight + equippedHeight + 8
+        if stackWidth <= screenWidth and stackHeight <= screenHeight then
+            local roomAbove, roomBelow = screenHeight - top - 5, below - 5
+            local stackAbove = position == "above"
+                or (position == "auto" and roomBelow < stackHeight and roomAbove > roomBelow)
+            if stackAbove and roomAbove < stackHeight and roomBelow >= stackHeight then
+                stackAbove = false
+            elseif not stackAbove and roomBelow < stackHeight and roomAbove >= stackHeight then
+                stackAbove = true
+            end
+            local x = math.max(0, math.min(screenWidth - stackWidth, left + offset - stackWidth / 2))
+            local y = stackAbove and top + 5 or below - 5 - stackHeight
+            y = math.max(0, math.min(screenHeight - stackHeight, y))
+            droppedTooltip:ClearAllPoints()
+            equippedTooltip:ClearAllPoints()
+            droppedTooltip:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", x, y + equippedHeight + 8)
+            equippedTooltip:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", x, y)
+            return
+        end
     end
-    local position = PlayerListPosition()
     local above = position == "above"
     if position == "auto" then
-        local below, top, screenHeight = detailAnchor:GetBottom(), detailAnchor:GetTop(), UIParent:GetHeight()
-        local dropHeight, equippedHeight = droppedTooltip:GetHeight(), equippedTooltip:GetHeight()
         local height = math.max(finite(dropHeight) and dropHeight or 0, finite(equippedHeight) and equippedHeight or 0)
         above = finite(below) and finite(top) and finite(screenHeight) and below < height + 5 and screenHeight - top > below
     end
@@ -1447,7 +1483,8 @@ local function DrawComparison()
         local expectedGUID = capture:GetParticipantGUID(detailEntry, selectedPlayer)
         snapshot = unique and class == selectedClass and SavedInspection(detailEntry, selectedPlayer, class, expectedGUID)
         status = inspectionMessages[inspectionState]
-        if inspectionState == "itemPending" and not pendingItems[detailEntry.link] then
+        if inspectionState == "itemPending" and not pendingItems[detailEntry.link]
+            and not (inspectionAttempt and inspectionAttempt.waitingForCapacity) then
             status = Label("Item data unavailable", "Данные предмета недоступны")
         end
         if not unique or class ~= selectedClass or expectedGUID == false then
@@ -1477,9 +1514,11 @@ equippedTooltip:SetScript("OnMouseUp", function(self, button)
     DrawComparison()
 end)
 
-local function ComparePlayer(name, class)
+local function ComparePlayer(name, class, attempt)
     if not detailEntry or not name then return end
     local entry = detailEntry
+    attempt = attempt or {expires = GetTime() + 6}
+    inspectionAttempt = attempt
     selectedPlayer, selectedClass = name, class
     local unique, currentClass = ComparisonParticipant(entry, name)
     local expectedGUID = capture:GetParticipantGUID(entry, name)
@@ -1494,20 +1533,28 @@ local function ComparePlayer(name, class)
         local _, pending = ns.HasInspectSlot(entry.link)
         if pending then
             inspectionState = "itemPending"
-            RequestItemData(entry.link)
+            local _, full = RequestItemData(entry.link)
+            attempt.waitingForCapacity = full
             DrawComparison()
             return
         end
         inspectionState = nil
         local requestState = inspector:Request(entry.link, name, class, function(status, snapshot, inspectedGUID)
             local matches = SaveInspection(entry, name, class, expectedGUID, snapshot, inspectedGUID)
-            if detailEntry == entry and selectedPlayer == name and selectedClass == class then
+            if inspectionAttempt == attempt then
                 inspectionState = matches and status or "unavailable"
                 DrawComparison()
             end
         end, expectedGUID)
         if not requestState then return end
         inspectionState = requestState
+        if requestState == "busy" and GetTime() + 0.5 <= attempt.expires then
+            C_Timer.After(0.5, function()
+                if inspectionAttempt ~= attempt or GetTime() > attempt.expires then return end
+                DrawComparison()
+                if inspectionAttempt == attempt then ComparePlayer(name, class, attempt) end
+            end)
+        end
     end
     DrawComparison()
 end
@@ -1520,6 +1567,7 @@ toggleDetails = function(entry, fromMain, owner)
         if liveComparison then details:Hide() end
         detailAnchor = anchor
         detailEntry, selectedPlayer, selectedClass, inspectionState = entry, nil, nil, nil
+        inspectionAttempt = nil
         local priceState
         detailDisenchant, priceState = ReadMastercraftDisenchant(owner, entry.link)
         detailPriceRetry = priceState
@@ -1660,6 +1708,15 @@ hist:SetScript("OnEvent", function(self)
 end)
 
 refresh = function(key)
+    -- Give a pinned tooltip first use of a freed request slot before redrawing the history rows.
+    if comparisonNeedsItem() then
+        if inspectionAttempt and inspectionAttempt.waitingForCapacity then
+            local _, full = RequestItemData(detailEntry.link)
+            inspectionAttempt.waitingForCapacity = full
+        end
+        if droppedTooltip.waitingForCapacity then RequestItemData(droppedTooltip.requestedLink) end
+        if equippedTooltip.waitingForCapacity then RequestItemData(equippedTooltip.requestedLink) end
+    end
     DrawMain()
     if hist:IsShown() then
         local changedDay = EnsureSelected()
@@ -1987,18 +2044,31 @@ do
             local unique, currentClass = ComparisonParticipant(entry, name)
             local saved = SavedInspection(entry, name, class, job.guid)
             if worldReady and not entry.closed and GetTime() < job.expires and HasRoll(entry) and unique and currentClass == class
+                and (job.phase ~= "winner" or (entry.done and entry.winner == name))
                 and capture:GetParticipantGUID(entry, name) == job.guid and not CompleteDropInspection(saved) then
                 local hasSlot, pending = ns.HasInspectSlot(entry.link)
                 if pending then
                     RequestItemData(entry.link)
                     jobs[#jobs + 1] = job
                 elseif hasSlot then
-                    local status = inspector:Request(entry.link, name, class, function(_, snapshot, guid)
+                    local function RetryWinner()
+                        local current = seen[entry] and seen[entry][name]
+                        if worldReady and entry.done and entry.winner == name
+                            and current and current.winner == job.token
+                            and GetTime() < job.expires and #jobs < 40 then
+                            jobs[#jobs + 1] = job
+                            Schedule()
+                        end
+                    end
+                    local status = inspector:Request(entry.link, name, class, function(result, snapshot, guid)
                         if snapshot and SaveInspection(entry, name, class, job.guid, snapshot, guid, true)
                             and detailEntry == entry then DrawComparison() end
+                        if result == "unavailable" then RetryWinner() end
                     end, job.guid)
                     if status == "busy" or status == "combat" or status == "inspectOpen" then
                         table.insert(jobs, 1, job)
+                    elseif status == "unavailable" or (status == "absent" and job.guid) then
+                        RetryWinner()
                     end
                 end
             end
@@ -2036,8 +2106,9 @@ do
                 if replaceIndex then table.remove(jobs, replaceIndex) end
             end
             if #jobs >= 40 then return end
-            previous[phase] = true
-            local job = { entry = entry, name = name, class = class, guid = guid, phase = phase, expires = GetTime() + 20 }
+            local job = { entry = entry, name = name, class = class, guid = guid, phase = phase,
+                expires = GetTime() + 20, token = {} }
+            previous[phase] = job.token
             if phase == "winner" then table.insert(jobs, 1, job) else jobs[#jobs + 1] = job end
         end
         if entry.done then
@@ -2248,6 +2319,7 @@ ev:SetScript("OnEvent", function(_, event, a1, a2, ...)
                 main:SetResizeBounds(MAIN_WIDTH, MIN_WINDOW_HEIGHT, MAIN_WIDTH, WindowHeightLimit())
                 ApplyWindowHeight()
                 DrawMain()
+                PlaceComparison(main)
             end
         elseif event == "ZONE_CHANGED_NEW_AREA" then
             if worldReady then UpdateVisit(false) end

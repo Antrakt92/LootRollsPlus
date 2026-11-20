@@ -303,6 +303,20 @@ SettingsPanel = newWidget("Frame", UIParent)
 SettingsPanel:Hide()
 function HideUIPanel(panel) panel:Hide() end
 
+do
+    local metadata = {}
+    for line in io.lines(root .. "/LootRollsPlus.toc") do
+        local key, value = line:match("^## (Category):%s*(.-)%s*$")
+        if not key then key, value = line:match("^## (Group):%s*(.-)%s*$") end
+        if key then
+            assert(metadata[key] == nil, "duplicate TOC " .. key)
+            metadata[key] = value
+        end
+    end
+    assert(metadata.Category == "Antrakt92", "the AddOns list must show Loot Rolls Plus under Antrakt92")
+    assert(metadata.Group == "LootRollsPlus", "Loot Rolls Plus must have its own AddOns list entry")
+end
+
 local function loadAddon(isReload)
     frames, timers = {}, {}
     settingsCategory = nil
@@ -716,6 +730,28 @@ assert(leftCard.lastPoint[1] == "BOTTOMRIGHT" and rightCard.lastPoint[1] == "BOT
 assert(leftCard.lastPoint[2] == frame and rightCard.lastPoint[2] == frame)
 assert(rightCard.lastPoint[4] - leftCard.lastPoint[4] == 8 and leftCard.lastPoint[5] == rightCard.lastPoint[5])
 assert(leftCard.lastPoint[4] >= 286, "the pair should stay on screen near the left edge")
+UIParent:SetSize(700, 800)
+frame.mockLeft = 470
+fire("DISPLAY_SIZE_CHANGED")
+assert(frame.mockLeft + rightCard.lastPoint[4] + rightCard:GetWidth() <= 700,
+    "an open main comparison must reflow when the viewport shrinks")
+UIParent:SetSize(550, 800)
+frame.mockLeft = 230
+fire("DISPLAY_SIZE_CHANGED")
+assert(leftCard.lastPoint[1] == "BOTTOMLEFT" and leftCard.lastPoint[2] == UIParent
+    and leftCard.lastPoint[3] == "BOTTOMLEFT", "the comparison must stack when the pair cannot fit side by side")
+assert(rightCard.lastPoint[1] == "BOTTOMLEFT" and rightCard.lastPoint[2] == UIParent
+    and rightCard.lastPoint[3] == "BOTTOMLEFT" and leftCard.lastPoint[4] == rightCard.lastPoint[4])
+assert(rightCard.lastPoint[5] > frame.mockTop
+    and leftCard.lastPoint[5] >= rightCard.lastPoint[5] + rightCard:GetHeight()
+    and leftCard.lastPoint[5] + leftCard:GetHeight() <= UIParent:GetHeight())
+assert(leftCard.lastPoint[4] >= 0 and leftCard.lastPoint[4] + leftCard:GetWidth() <= UIParent:GetWidth())
+UIParent:SetSize(1000, 800)
+frame.mockLeft = 14
+fire("DISPLAY_SIZE_CHANGED")
+assert(leftCard.lastPoint[1] == "BOTTOMRIGHT" and rightCard.lastPoint[1] == "BOTTOMLEFT"
+    and leftCard.lastPoint[2] == frame and rightCard.lastPoint[2] == frame,
+    "return to side-by-side when space is restored")
 assert(#LootRollsPlusDetails.children == 2, "the comparison should only have two tooltip frames")
 assert(comparisonRow.entry.inspections.Self.links[1] == equipped, "opening the roll should inspect its winner")
 comparisonRow:GetScript("OnClick")(comparisonRow)
@@ -1782,6 +1818,46 @@ do
     contains(card.footer, "Inspected near the roll")
 end
 do
+    local previous = {
+        t = wallTime - 10, link = cloth, done = true, winner = "Other Mage",
+        winnerClass = "MAGE", winnerType = "greed",
+        rolls = {{name = "Other Mage", class = "MAGE", type = "greed"}},
+    }
+    C_LootHistory.GetSortedDropsForEncounter = function() return {} end
+    function GetNumGroupMembers() return 2 end
+    for index, scenario in ipairs({"close", "expire", "retry"}) do
+        LootRollsPlusCharDB.days = {[date("%Y-%m-%d", wallTime)] = {previous}}
+        loadAddon(true)
+        local key = 1100 + index
+        historyTime = historyTime + 1
+        inspectedUnit = nil
+        drops[key] = {lootListKey = key, itemHyperlink = cloth, startTime = historyTime,
+            rollInfos = {{playerName = "Other Mage", playerClass = "MAGE", playerGUID = "Player-Mage", state = 0}}}
+        fire("LOOT_HISTORY_UPDATE_DROP", 20, key)
+        timerNow = timerNow + 0.5
+        flushTimers()
+        assert(inspectedUnit == "party1", "background inspection must occupy the shared request")
+        local oldRow
+        for _, candidate in ipairs(LootRollsPlusFrame.children) do
+            if candidate.entry == previous then oldRow = candidate end
+        end
+        assert(oldRow)
+        oldRow:GetScript("OnClick")(oldRow)
+        fire("INSPECT_READY", "Player-Mage")
+        inspectedUnit = nil
+        if scenario == "close" then oldRow:GetScript("OnClick")(oldRow) end
+        timerNow = timerNow + (scenario == "expire" and 7 or 2)
+        flushTimers()
+        if scenario ~= "retry" then
+            assert(not inspectedUnit, "closing the comparison or expiring its deadline must invalidate the retry")
+        else
+            assert(inspectedUnit == "party1", "an open comparison must retry when the inspection throttle expires")
+            fire("INSPECT_READY", "Player-Mage")
+            assert(LootRollsPlusEquippedTooltip.tooltipLink == memberItem)
+        end
+    end
+end
+do
     LootRollsPlusCharDB.days = {}
     C_LootHistory.GetSortedDropsForEncounter = function() return {} end
     function GetNumGroupMembers() return 2 end
@@ -1806,6 +1882,34 @@ do
     timerNow = timerNow + 0.5
     flushTimers()
     assert(inspectedUnit == "party1", "a confirmed winner gets one attempt after the earlier Need inspection expired")
+    fire("INSPECT_READY", "Player-Mage")
+    assert(nextVisibleRow(LootRollsPlusFrame).entry.inspections["Other Mage"].links[1] == memberItem)
+end
+do
+    LootRollsPlusCharDB.days = {}
+    C_LootHistory.GetSortedDropsForEncounter = function() return {} end
+    loadAddon(true)
+    local key = 1006
+    wallTime, historyTime = wallTime + 1, historyTime + 1
+    local winner = {playerName = "Other Mage", playerClass = "MAGE", playerGUID = "Player-Mage", state = 0, roll = 98}
+    drops[key] = {lootListKey = key, itemHyperlink = cloth, startTime = historyTime, rollInfos = {winner}, winner = winner}
+    local previousCanInspect = CanInspect
+    function CanInspect() return false end
+    inspectedUnit = nil
+    fire("LOOT_HISTORY_UPDATE_DROP", 20, key)
+    timerNow = timerNow + 0.5
+    flushTimers()
+    assert(not inspectedUnit)
+    CanInspect = previousCanInspect
+    timerNow = timerNow + 0.5
+    flushTimers()
+    assert(inspectedUnit == "party1", "a recent winner should be inspected when back in range")
+    InspectFrame = {IsShown = function() return true end}
+    fire("INSPECT_READY", "Player-Mage")
+    InspectFrame = nil
+    inspectedUnit = nil
+    for _ = 1, 4 do timerNow = timerNow + 0.5; flushTimers() end
+    assert(inspectedUnit == "party1", "a recent winner should retry after the Blizzard Inspect frame closes")
     fire("INSPECT_READY", "Player-Mage")
     assert(nextVisibleRow(LootRollsPlusFrame).entry.inspections["Other Mage"].links[1] == memberItem)
 end
@@ -1950,5 +2054,60 @@ do
         assert(saved.links[1] == firstRing and saved.links[2] == (not changed and secondRing or nil),
             "fill a partial snapshot only while the previously known equipment still agrees")
     end
+end
+for _, warmTooltip in ipairs({false, true}) do
+    local when = wallTime
+    local entries = {}
+    for id = 20001, 20100 do
+        local link = ("|cnIQ2:|Hitem:%d::::::::|h[Cold gear]|h|r"):format(id)
+        entries[#entries + 1] = {link = link, t = when, done = true, winner = "Self",
+            winnerClass = "PALADIN", winnerType = "need", rolls = {}}
+    end
+    local pinned = "|cnIQ2:|Hitem:30001::::::::|h[Cold comparison]|h|r"
+    entries[#entries + 1] = {link = pinned, t = when, done = true, rolls = {},
+        winner = warmTooltip and "Self" or nil, winnerClass = warmTooltip and "PALADIN" or nil,
+        winnerType = warmTooltip and "greed" or nil}
+    LootRollsPlusDB.hideSolo = false
+    LootRollsPlusCharDB.days = {[date("%Y-%m-%d", when)] = entries}
+    C_LootHistory.GetSortedDropsForEncounter = function() return {} end
+    C_Item.GetItemInfoInstant = function() return nil end
+    local callbacks, pinnedRequests = {}, 0
+    Item = {CreateFromItemLink = function(_, link)
+        return {ContinueOnItemLoad = function(_, callback)
+            callbacks[link] = callback
+            if link == pinned then pinnedRequests = pinnedRequests + 1 end
+        end}
+    end}
+    loadAddon(true)
+    local _, _, itemScroll = openHistory()
+    local row = nextVisibleRow(itemScroll.scrollChild)
+    assert(row.entry.link == pinned and not callbacks[pinned])
+    local card, gear = LootRollsPlusDroppedTooltip, LootRollsPlusEquippedTooltip
+    card.failHyperlink = not warmTooltip
+    row:GetScript("OnClick")(row)
+    if warmTooltip then assert(card.tooltipLink == pinned) end
+    contains((warmTooltip and gear or card).value, "Loading item")
+    assert(not callbacks[pinned], "a comparison must respect the item request cap")
+    timerNow = timerNow + 15
+    flushTimers()
+    flushTimers()
+    assert(callbacks[pinned], "a pinned card must retry once the item request cap frees up")
+    if warmTooltip then
+        timerNow = timerNow + 15
+        flushTimers()
+        flushTimers()
+        contains(gear.value, "Item data unavailable")
+        assert(pinnedRequests == 1, "a stuck slot request must stop retrying after its timeout")
+        C_Item.GetItemInfoInstant = function(link)
+            if link == pinned then return 30001, "Armor", "Cloth", "INVTYPE_CHEST", 84, 4, 1 end
+        end
+        function GetInventorySlotInfo(name) if name == "ChestSlot" then return 5 end end
+        function GetInventoryItemLink(unit, slot) if unit == "player" and slot == 5 then return equipped end end
+    end
+    card.failHyperlink = nil
+    callbacks[pinned]()
+    flushTimers()
+    assert(card.tooltipLink == pinned, "the deferred comparison should show the loaded item")
+    if warmTooltip then assert(gear.tooltipLink == equipped, "late slot metadata must resume the selected inspection") end
 end
 print("Addon TOC, event, and UI integration tests passed")
