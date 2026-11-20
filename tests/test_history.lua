@@ -74,6 +74,22 @@ assert(History.Import(ambigDB, {days = {[day] = {{
 assert(ambigDB.days[day][1].winnerType == nil)
 assert(not History.IsPlayerWin(ambigDB.days[day][1], "Same Surname", "Same"),
     "duplicate imported bare names cannot identify the current character")
+local linkedDB = {days = {}}
+local winnerLink = "|Hplayer:Same-RealmA:123|h[Same]|h"
+local otherLink = "|Hplayer:Same-RealmB:124|h[Same]|h"
+assert(History.Import(linkedDB, {days = {[day] = {{
+    link = link, t = 23, winner = winnerLink,
+    rolls = {
+        {name = winnerLink, type = "need", value = "97"},
+        {name = otherLink, type = "greed", value = "99"},
+    },
+}}}}, dateKey))
+local linkedWin = linkedDB.days[day][1]
+assert(linkedWin.winner == "Same-RealmA" and linkedWin.rolls[2].name == "Same-RealmB",
+    "import must preserve different player identities even if chat displays the same label")
+assert(linkedWin.winnerType == "need" and linkedWin.winnerValue == 97)
+assert(History.IsPlayerWin(linkedWin, "Same-RealmA", "Same"))
+assert(not History.IsPlayerWin(linkedWin, "Same-RealmB", "Same"))
 assert(History.IsPlayerWin(entries[1], "Маг-Реалм", "Маг"),
     "an unambiguous imported full name should match")
 assert(History.IsPlayerWin({done = true, legacy = true, winner = "Self"}, "Self Surname", "Self"),

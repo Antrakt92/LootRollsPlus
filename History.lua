@@ -36,8 +36,8 @@ local function playerName(value)
     value = clean(value, "string")
     if not value then return end
     local uncolored = stripColor(value)
-    local linkLabel = uncolored:match("^|Hplayer:[^|]+|h%[([^|%]]+)%]|h$")
-    return plainText(linkLabel or uncolored)
+    local target = uncolored:match("^|Hplayer:([^:|]+)[^|]*|h%[[^|%]]+%]|h$")
+    return plainText(target or uncolored)
 end
 
 local function itemLink(value)
