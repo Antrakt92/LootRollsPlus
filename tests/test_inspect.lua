@@ -186,4 +186,23 @@ end
 assert(inspect:Request(drop, "Other Mage", "MAGE", receive, "B") == nil and status == "ready",
     "a result delivered by a NotifyInspect hook must not be replaced with a loading status")
 NotifyInspect = standardNotifyInspect
+-- Forever can still expose the complete name through UnitNameUnmodified
+-- and its surname separator when NameUtil has no full name for the unit.
+local standardNameUtil = NameUtil
+local standardUnitName = UnitName
+NameUtil = {GetUnmodifiedUnitFullName = function() return nil end}
+UnitNameUnmodified = function(unit)
+    if unit == "party1" then return "Other", "Mage" end
+    return standardUnitName(unit)
+end
+Constants = {CharacterNameSeparatorConsts = {CHARACTERNAME_SURNAME_SEPARATOR = " "}}
+clock = 37
+assert(ns.GetLootPlayerNames("party1") == "Other Mage")
+assert(inspect:Request(drop, "Other Mage", "MAGE", receive, "A") == "absent")
+assert(inspect:Request(drop, "Other Mage", "MAGE", receive, "B") == "loading",
+    "a verified participant with a reconstructed full name can still be inspected")
+inspect:Ready("B")
+assert(status == "ready" and resultGUID == "B")
+NameUtil, UnitNameUnmodified, Constants = standardNameUtil, nil, nil
+
 print("Inspect tests passed")

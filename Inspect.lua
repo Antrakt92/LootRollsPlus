@@ -47,6 +47,7 @@ end
 
 local function nameMatch(unit, name)
     local full = NameUtil and read(NameUtil.GetUnmodifiedUnitFullName, unit)
+    if type(full) ~= "string" or full == "" then full = ns.GetLootPlayerNames(unit) end
     if full == name then return "exact" end
     local nameMethod = UnitNameUnmodified or UnitName
     local ok, short, surname = pcall(nameMethod, unit)
