@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.3 — 20-Nov-2026 — Roll updates and equipment comparisons
+
+- Recover live rolls and history after delayed game updates. Keep canceled rolls hidden when the live panel is toggled, and keep repeated chat results from spilling into the next roll for the same item.
+- Preserve full player names when importing history and use them to find eligible group members for inspection.
+- Retry equipment comparisons when inspection or item data is temporarily busy. Stack the two tooltips when the game window is too narrow to fit them side by side.
+
 ## 1.3.2 — 19-Nov-2026 — AddOns list
 
 - Show Loot Rolls Plus under Antrakt92 in the in-game AddOns list.
