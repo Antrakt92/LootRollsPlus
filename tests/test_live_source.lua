@@ -583,4 +583,40 @@ assert(not lookup(source, 905) and expect(source, 906).rolls[1].name == "Paladin
     "a later START must neither resurrect a still-visible cancelled frame nor let it spoil the new attribution")
 cancelledFrame:Hide()
 
+for _, cancelEvent in ipairs({"CANCEL_LOOT_ROLL", "CANCEL_ALL_LOOT_ROLLS"}) do
+    for _, cancelWhileDisabled in ipairs({false, true}) do
+        reset()
+        popup(907, 1, link)
+        drops[77] = {drop(31, clock, link, {need})}
+        source = newSource()
+        assert(lookup(source, 907))
+        if cancelWhileDisabled then source:SetEnabled(false) end
+        emit(cancelEvent, 907)
+        advance()
+        assert(not lookup(source, 907))
+        if not cancelWhileDisabled then source:SetEnabled(false) end
+        source:SetEnabled(true)
+        advance()
+        assert(not lookup(source, 907), "settings must not resurrect a known canceled popup")
+
+        source:SetEnabled(false)
+        emit("START_LOOT_ROLL", secret, 60000)
+        popup(907, 1, separate)
+        drops[77] = {drop(32, clock, separate, {offspec})}
+        emit("START_LOOT_ROLL", 907, 60000)
+        assert(not lookup(source, 907), "fresh START must not display choices while disabled")
+        source:SetEnabled(true)
+        advance()
+        assert(expect(source, 907).rolls[1].name == "Paladin", "fresh START must retire an older cancellation")
+
+        emit(cancelEvent, 907)
+        source:SetEnabled(false)
+        emit("PLAYER_LEAVING_WORLD")
+        emit("PLAYER_ENTERING_WORLD")
+        source:SetEnabled(true)
+        advance()
+        assert(expect(source, 907).rolls[1].name == "Paladin", "cancellation must not cross the world boundary")
+    end
+end
+
 print("Live source timing, attribution, privacy, and lifecycle tests passed")

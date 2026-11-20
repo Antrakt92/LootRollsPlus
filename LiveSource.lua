@@ -7,8 +7,10 @@ local REFRESH_INTERVAL = 0.12
 local START_TOLERANCE = 2
 local HISTORY_RETRY_INTERVAL = 0.5
 local HISTORY_RETRY_WINDOW = 2
+local LIFECYCLE_EVENTS = {
+    "PLAYER_ENTERING_WORLD", "PLAYER_LEAVING_WORLD", "START_LOOT_ROLL", "CANCEL_LOOT_ROLL", "CANCEL_ALL_LOOT_ROLLS",
+}
 local EVENTS = {
-    "START_LOOT_ROLL", "CANCEL_LOOT_ROLL", "CANCEL_ALL_LOOT_ROLLS",
     "LOOT_HISTORY_UPDATE_DROP", "LOOT_HISTORY_UPDATE_ENCOUNTER", "LOOT_HISTORY_CLEAR_HISTORY",
     "GROUP_ROSTER_UPDATE", "DISPLAY_SIZE_CHANGED", "UI_SCALE_CHANGED", "GAME_PAD_ACTIVE_CHANGED",
 }
@@ -506,17 +508,31 @@ function Source:OnEvent(event, first, second)
     if event == "PLAYER_LEAVING_WORLD" then
         self.frame:Hide()
         self.inWorld = false
-        self.disabledAmbiguity = nil
+        self.disabledAmbiguity, self.disabledKnownRolls = nil, nil
         self:Reset()
         self:Publish({})
         return
     end
     if event == "PLAYER_ENTERING_WORLD" then
-        self.disabledAmbiguity = nil
+        self.disabledAmbiguity, self.disabledKnownRolls = nil, nil
         self:Reset()
         self.inWorld = true
     end
-    if not self.inWorld or not self.enabled then return end
+    if not self.inWorld then return end
+    if not self.enabled then
+        local id = key(first)
+        local known = self.disabledKnownRolls
+        -- While hidden, track lifecycle only for IDs already observed.
+        if event == "START_LOOT_ROLL" and id then
+            if self.cancelled[id] and self.disabledAmbiguity then self.disabledAmbiguity[id] = nil end
+            self.cancelled[id], self.retired[id] = nil, nil
+        elseif event == "CANCEL_LOOT_ROLL" and known and id and known[id] then
+            self.cancelled[id] = true
+        elseif event == "CANCEL_ALL_LOOT_ROLLS" then
+            for observedID in pairs(known or {}) do self.cancelled[observedID] = true end
+        end
+        return
+    end
 
     if event == "START_LOOT_ROLL" then
         local id = key(first)
@@ -614,8 +630,7 @@ function Source:Start(onChange, initiallyEnabled)
     self.frame = frame
     self.inWorld = true
     frame:Hide()
-    frame:RegisterEvent("PLAYER_ENTERING_WORLD")
-    frame:RegisterEvent("PLAYER_LEAVING_WORLD")
+    for _, event in ipairs(LIFECYCLE_EVENTS) do frame:RegisterEvent(event) end
     local elapsed = 0
     frame:SetScript("OnEvent", function(_, ...) self:OnEvent(...) end)
     frame:SetScript("OnUpdate", function(_, delta)
@@ -641,13 +656,19 @@ function Source:SetEnabled(enabled)
     self.enabled = enabled
     if not enabled and self.observations then
         local ambiguity = self.disabledAmbiguity or {}
+        local known = {}
         for id, observation in pairs(self.observations) do
+            known[id] = true
             if observation.ambiguous then ambiguity[id] = observation end
         end
         self.disabledAmbiguity = next(ambiguity) and ambiguity or nil
+        self.disabledKnownRolls = next(known) and known or nil
     end
+    local cancelled, retired = self.cancelled, self.retired
     self:Reset()
+    self.cancelled, self.retired = cancelled or {}, retired or {}
     if enabled then
+        self.disabledKnownRolls = nil
         for _, event in ipairs(EVENTS) do self.frame:RegisterEvent(event) end
         if self.inWorld then self:Wake(true) end
     else
