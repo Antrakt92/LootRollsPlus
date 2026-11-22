@@ -1171,4 +1171,35 @@ for _, event in ipairs({"LOOT_HISTORY_UPDATE_DROP", "LOOT_HISTORY_UPDATE_ENCOUNT
     end
 end
 
+for _, scenario in ipairs({"same-generation update", "recycled key", "stale first read"}) do
+    setDrops()
+    engine = new()
+    engine:Start()
+    local original = drop(270, clock)
+    advance(0.25)
+    local sibling = drop(271, clock)
+    sibling.lootListKey = secret
+    setDrops(original, sibling)
+    engine:HandleEvent("LOOT_HISTORY_UPDATE_ENCOUNTER", 7)
+    assert(#row == 1 and not row[1].done)
+    if scenario ~= "stale first read" then
+        advance(0.25)
+        C_LootHistory.GetSortedDropsForEncounter = function() return nil end
+        engine:HandleEvent("LOOT_HISTORY_UPDATE_ENCOUNTER", 7)
+        C_LootHistory.GetSortedDropsForEncounter = readEncounter
+    end
+
+    local newStart = scenario == "same-generation update" and original.startTime or clock
+    local updated = drop(270, newStart, {terminalVote}, terminalVote)
+    sibling.lootListKey = 271
+    setDrops(updated, sibling)
+    advance(0.5)
+    if newStart == original.startTime then
+        assert(#row == 2 and row[1].winnerValue == 87, "a new event authorizes a newer result for the same generation")
+    else
+        assert(#row == 3 and row[1].closed and row[2].winnerValue == 87,
+            "a confirmed older generation must not hide a recycled key after " .. scenario)
+    end
+end
+
 print("Capture tests passed")

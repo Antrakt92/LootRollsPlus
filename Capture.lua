@@ -846,7 +846,7 @@ function ns.NewCapture(callbacks)
             end
             -- An individual update supersedes only this row of an older encounter read.
             if not encounterDrops and retries[encounterRetry] then
-                retries[encounterRetry].confirmed[lootListKey] = true
+                retries[encounterRetry].confirmed[lootListKey] = startTime
             end
         end
         local previous = slot.entry
@@ -1081,10 +1081,12 @@ function ns.NewCapture(callbacks)
         for _, raw in ipairs(rows) do
             local drop = clean(raw, "table")
             local lootListKey = drop and id(drop.lootListKey)
-            if not lootListKey then
+            local startTime, identity
+            if lootListKey then startTime, identity = readDropMetadata(drop) end
+            local confirmedStart = lootListKey and confirmed and confirmed[lootListKey]
+            if not lootListKey or (confirmedStart and not startTime) then
                 complete = false
-            elseif not confirmed or not confirmed[lootListKey] then
-                local startTime, identity = readDropMetadata(drop)
+            elseif not confirmedStart or startTime > confirmedStart then
                 local slot = drops[lootListKey]
                 if not startTime or not identity or staleDrop(slot, startTime, identity) then
                     if not baseline then
@@ -1097,7 +1099,7 @@ function ns.NewCapture(callbacks)
                 elseif not startLimit or startTime <= startLimit then
                     local readable = snapshotDrop(encounterID, lootListKey, drop, sourceName, baseline, rows)
                     if readable then
-                        if confirmed then confirmed[lootListKey] = true end
+                        if confirmed then confirmed[lootListKey] = startTime end
                     elseif not baseline then
                         retryDropUpdate(encounterID, lootListKey, drops[lootListKey], deadline)
                     end
@@ -1196,8 +1198,9 @@ function ns.NewCapture(callbacks)
                     local retries = readRetries[drops]
                     local older = retries and retries[encounterRetry]
                     if older then
+                        -- A fresh event can update a row even when its start is unchanged.
                         older.startLimit = math.max(older.startLimit, startLimit)
-                        for key in pairs(confirmed) do older.confirmed[key] = true end
+                        older.confirmed = confirmed
                     else
                         retryRead(encounterID, drops, encounterRetry, function(retry, deadline)
                             return scanEncounter(encounterID, false, retry.startLimit, retry.confirmed, deadline)
