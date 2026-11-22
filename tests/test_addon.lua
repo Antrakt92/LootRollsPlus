@@ -811,6 +811,13 @@ mastercraftLabel = "Распыление (не хватает некоторых
 comparisonRow:GetScript("OnClick")(comparisonRow)
 comparisonRow:GetScript("OnClick")(comparisonRow)
 assert(leftCard.doubleLines[3][1] == "Disenchant (partial)")
+for _, estimate in ipairs({{"分解", "Disenchant"}, {"分解（部分价格缺失）", "Disenchant (partial)"}}) do
+    mastercraftLabel = estimate[1]
+    comparisonRow:GetScript("OnClick")(comparisonRow)
+    comparisonRow:GetScript("OnClick")(comparisonRow)
+    assert(leftCard.doubleLines[3] and leftCard.doubleLines[3][1] == estimate[2],
+        "Mastercraft's Chinese tooltip should preserve full and partial estimates")
+end
 displayedMastercraftItem = cloth:gsub("item:123:", "item:123:1")
 comparisonRow:GetScript("OnClick")(comparisonRow)
 comparisonRow:GetScript("OnClick")(comparisonRow)
@@ -2085,7 +2092,9 @@ do
             "fill a partial snapshot only while the previously known equipment still agrees")
     end
 end
-for _, warmTooltip in ipairs({false, true}) do
+for _, scenario in ipairs({"cold", "cold-price", "cached-price", "warm"}) do
+    local warmTooltip = scenario == "warm"
+    local priceUnlisted = scenario == "cold-price" or scenario == "cached-price"
     local when = wallTime
     local entries = {}
     for id = 20001, 20100 do
@@ -2106,6 +2115,7 @@ for _, warmTooltip in ipairs({false, true}) do
         return {ContinueOnItemLoad = function(_, callback)
             callbacks[link] = callback
             if link == pinned then pinnedRequests = pinnedRequests + 1 end
+            if link == pinned and scenario == "cached-price" then callback() end
         end}
     end}
     loadAddon(true)
@@ -2114,10 +2124,16 @@ for _, warmTooltip in ipairs({false, true}) do
     assert(row.entry.link == pinned and not callbacks[pinned])
     local card, gear = LootRollsPlusDroppedTooltip, LootRollsPlusEquippedTooltip
     card.failHyperlink = not warmTooltip
+    mastercraftEnabled, mastercraftLoadingOnly = true, nil
+    mastercraftLabel, mastercraftValue = "Disenchant", priceUnlisted and "no price" or "~21s"
+    if not priceUnlisted then displayedMastercraftItem = cloth end
     row:GetScript("OnClick")(row)
+    displayedMastercraftItem = nil
+    mastercraftValue = "~21s"
     if warmTooltip then assert(card.tooltipLink == pinned) end
     contains((warmTooltip and gear or card).value, "Loading item")
     assert(not callbacks[pinned], "a comparison must respect the item request cap")
+    if scenario == "cached-price" then card.failHyperlink = nil end
     timerNow = timerNow + 15
     flushTimers()
     flushTimers()

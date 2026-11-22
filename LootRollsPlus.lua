@@ -1031,7 +1031,7 @@ local equippedTooltip = ComparisonTooltip("LootRollsPlusEquippedTooltip")
 
 local disenchantLabels = {
     ["Disenchant"] = true, ["Распыление"] = true, ["Désenchanter"] = true,
-    ["Desencantar"] = true, ["Entzaubern"] = true, ["마력 추출"] = true,
+    ["Desencantar"] = true, ["Entzaubern"] = true, ["마력 추출"] = true, ["分解"] = true,
 }
 
 local function ReadMastercraftDisenchant(owner, link)
@@ -1059,7 +1059,7 @@ local function ReadMastercraftDisenchant(owner, link)
         if label == "|cff4da6ffMastercraft|r" then
             lastLine = i + 5
         elseif lastLine and i <= lastLine and label then
-            local base = label:match("^(.-) %([^()]+%)$") or label
+            local base = label:match("^(.-) %([^()]+%)$") or label:match("^(.-)（.+）$") or label
             if disenchantLabels[base] then
                 local value = TooltipText(_G["GameTooltipTextRight" .. i])
                 local r, g, b = left:GetTextColor()
@@ -1152,6 +1152,7 @@ comparisonNeedsItem = function(link, request)
     if not details:IsShown() then return false end
     if not link then
         return droppedTooltip.waitingForCapacity or equippedTooltip.waitingForCapacity
+            or detailPriceRetry == "uncached"
             or (inspectionAttempt and inspectionAttempt.waitingForCapacity)
     end
     return detailPriceRetry == request
@@ -1497,7 +1498,7 @@ local function DrawComparison()
         ReleaseTooltip(details)
     end
     ShowComparisonTooltip(droppedTooltip, detailEntry.link, nil, detailDisenchant)
-    if detailPriceRetry == "unpriced" then
+    if detailPriceRetry == "unpriced" and not droppedTooltip.waitingForCapacity then
         detailPriceRetry = droppedTooltip.requestedLink and pendingItems[droppedTooltip.requestedLink] or nil
     end
     DrawEquipped(snapshot, status, inspectionState, true)
@@ -1570,8 +1571,12 @@ toggleDetails = function(entry, fromMain, owner)
         inspectionAttempt = nil
         local priceState
         detailDisenchant, priceState = ReadMastercraftDisenchant(owner, entry.link)
-        detailPriceRetry = priceState
-        if priceState == "uncached" then detailPriceRetry = RequestItemData(entry.link) end
+        if priceState == "uncached" then
+            local request, full = RequestItemData(entry.link)
+            detailPriceRetry = full and "uncached" or request
+        else
+            detailPriceRetry = priceState
+        end
         ReleaseTooltip(owner)
         details:Show()
         if hoverRow then ReleaseTooltip(hoverRow) end
@@ -1713,6 +1718,11 @@ refresh = function(key)
         if inspectionAttempt and inspectionAttempt.waitingForCapacity then
             local _, full = RequestItemData(detailEntry.link)
             inspectionAttempt.waitingForCapacity = full
+        end
+        if detailPriceRetry == "uncached"
+            or (detailPriceRetry == "unpriced" and droppedTooltip.waitingForCapacity) then
+            local request, full = RequestItemData(detailEntry.link)
+            if not full then detailPriceRetry = request end
         end
         if droppedTooltip.waitingForCapacity then RequestItemData(droppedTooltip.requestedLink) end
         if equippedTooltip.waitingForCapacity then RequestItemData(equippedTooltip.requestedLink) end
