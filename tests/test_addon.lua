@@ -1751,6 +1751,36 @@ do
 end
 
 do
+    local previousWidth, previousHeight = UIParent:GetWidth(), UIParent:GetHeight()
+    UIParent:SetSize(1000, 600)
+    local low = CreateFrame("Frame", nil, UIParent)
+    local high = CreateFrame("Frame", nil, UIParent)
+    low.mockLeft, low.mockRight, low.mockBottom, low.mockTop = 400, 650, 150, 230
+    high.mockLeft, high.mockRight, high.mockBottom, high.mockTop = 185, 390, 340, 420
+    local oldFrames = GroupLootContainer.rollFrames
+    GroupLootContainer.rollFrames = {low, high}
+    local players = {}
+    for i = 1, 5 do players[i] = {name = "Raider " .. i, choice = "greed"} end
+    local function entry(id, anchor)
+        return {id = id, link = cloth, anchor = anchor, players = players, leaders = {}, counts = {greed = 5}, more = 0}
+    end
+    auditView:Render({entry(3001, low), entry(3002, high)}, true, false)
+    local lowCard, highCard = LootRollsPlusLiveRoll1, LootRollsPlusLiveRoll2
+    assert(lowCard:GetWidth() > highCard:GetWidth())
+    lowCard.mockLeft, lowCard.mockRight, lowCard.mockBottom, lowCard.mockTop = 190, 395, 170, 210
+    highCard.mockLeft, highCard.mockRight, highCard.mockBottom, highCard.mockTop = 5, 180, 360, 400
+    lowCard.toggle:GetScript("OnClick")()
+    local roster = LootRollsPlusLiveDetails
+    assert(roster:IsVisible() and roster.lastPoint[1] == "TOPRIGHT" and roster.lastPoint[2] == lowCard,
+        "after screen clamping, the wide roster must fit below without covering the upper, narrower prompt")
+    lowCard.mockLeft, lowCard.mockRight, lowCard.mockBottom, lowCard.mockTop = nil, nil, nil, nil
+    highCard.mockLeft, highCard.mockRight, highCard.mockBottom, highCard.mockTop = nil, nil, nil, nil
+    GroupLootContainer.rollFrames = oldFrames
+    auditView:Hide()
+    UIParent:SetSize(previousWidth, previousHeight)
+end
+
+do
     -- A warning on a losing vote belongs to that participant, not the winner's row.
     local record = {
         t = wallTime, link = shield, done = true, winner = "Warrior", winnerClass = "WARRIOR",

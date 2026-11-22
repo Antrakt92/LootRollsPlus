@@ -441,8 +441,10 @@ local function positionDetails(frame, card)
     if not finite(screenHeight) or screenHeight < height then return false end
     local function canAlign(leftEdge, top)
         if not top then return true end
+        -- The roster clamps on both axes, including when it anchors to a narrower card.
+        local left = math.max(0, math.min(leftEdge, screenWidth - width))
         local bottom = math.max(0, math.min(top - height, screenHeight - height))
-        return not view.RectOverlaps(rectAt(leftEdge, bottom, width, height), layoutObstacles)
+        return not view.RectOverlaps(rectAt(left, bottom, width, height), layoutObstacles)
     end
     local function tryVertical(anchor, above)
         local bounds = frameRect(anchor) or anchor.bounds
