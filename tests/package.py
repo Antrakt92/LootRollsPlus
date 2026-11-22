@@ -7,20 +7,24 @@ from tempfile import TemporaryDirectory
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 
+ADDON_NAME = "LootRollsPlus"
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
-    toc = root / f"{root.name}.toc"
+    toc = root / f"{ADDON_NAME}.toc"
     metadata = toc.read_text(encoding="utf-8")
     version = re.search(r"^## Version: ([0-9A-Za-z.-]+)$", metadata, re.MULTILINE)
     if not version:
         parser.error("The TOC must declare a version.")
     archive = args.output.resolve()
-    if archive.name != f"{root.name}-{version.group(1)}.zip":
-        parser.error(f"Expected {root.name}-{version.group(1)}.zip.")
+    expected_name = f"{ADDON_NAME}-{version.group(1)}.zip"
+    if archive.name != expected_name:
+        parser.error(f"Expected {expected_name}.")
     modules = [
         line.strip()
         for line in metadata.splitlines()
@@ -34,7 +38,7 @@ def main():
         toc.name, *modules, "LICENSE", "README.md", "CHANGELOG.md",
         "media/addon-icon.png",
     ]
-    expected = {f"{root.name}/{name}": (root / name).read_bytes() for name in names}
+    expected = {f"{ADDON_NAME}/{name}": (root / name).read_bytes() for name in names}
     archive.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix=".loot-rolls-plus-", dir=archive.parent) as staging:
         candidate = Path(staging) / archive.name
