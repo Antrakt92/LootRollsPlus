@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.4 — 22-Nov-2026 — Loot history and inspection fixes
+
+- Recover missing drops and updated winners after incomplete loot history responses.
+- Avoid inspecting the wrong player when names are ambiguous and discard expired inspection results.
+- Recover player classes from linked names in Dungeon Quest Atlas history.
+- Keep the expanded raid roster clear of loot prompts at the edge of the screen.
+- Restore delayed Mastercraft disenchant estimates and recognize Chinese price labels.
+
 ## 1.3.3 — 20-Nov-2026 — Roll updates and equipment comparisons
 
 - Recover live rolls and history after delayed game updates. Keep canceled rolls hidden when the live panel is toggled, and keep repeated chat results from spilling into the next roll for the same item.
