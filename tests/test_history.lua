@@ -193,6 +193,15 @@ assert(History.RecoverClasses({[day] = {shortWinner}}, {runLog = {shortRun}}, id
 assert(not shortWinner.verifiedWinnerClass and not shortWinner.rolls[1].class,
     "a bare roster name must be unique even when the roster key matches literally")
 
+local linkedAtlasWinner = {link = link, winner = "Same-RealmA", t = 118, legacy = true,
+    rolls = {{name = "Same-RealmA"}, {name = "Same-RealmB"}}}
+local linkedAtlasRun = {started = 100, last = 119, party = {["Same-RealmA"] = "DRUID", ["Same-RealmB"] = "MAGE"},
+    loot = {{link = link, who = "|cff69ccf0" .. winnerLink .. "|r"}, {link = link, who = otherLink}}}
+assert(History.RecoverClasses({[day] = {linkedAtlasWinner}}, {runLog = {linkedAtlasRun}}, identity, colors) == 1,
+    "Atlas loot captured from chat can store a player hyperlink rather than a bare name")
+assert(linkedAtlasWinner.verifiedWinnerClass == "DRUID" and linkedAtlasWinner.rolls[2].class == "MAGE",
+    "identical link labels must not create a duplicate match or change either player identity")
+
 local mismatched = {link = link, winner = "Bear Dillinger", t = 118, legacy = true, winnerClass = "MAGE"}
 assert(History.RecoverClasses({[day] = {mismatched}}, {runLog = {run}}, identity, colors) == 0)
 assert(not mismatched.verifiedWinnerClass)
@@ -233,7 +242,7 @@ assert(destination[1] == movedFirst and destination[2] == existing and destinati
 local unsorted = {movedLater, existing, movedFirst}
 History.NormalizeDays({[day] = unsorted}, dateKey)
 assert(unsorted[1] == movedFirst and unsorted[2] == existing and unsorted[3] == movedLater)
-print("History tests passed")
 assert(not History.IsPlayerWin({done = true, winner = "Self", rolls = {
     {name = "Self", class = "PALADIN"}, {name = "Self Surname", class = "PALADIN"},
 }}, "Self Surname", "Self", "PALADIN"), "two matching records cannot identify a bare-name winner")
+print("History tests passed")

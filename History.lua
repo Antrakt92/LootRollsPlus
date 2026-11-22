@@ -351,8 +351,8 @@ local function classFromParty(party, name, classColors, unique)
     local short = firstName(name)
     if short == name and not unique then return end
     local class = plainText(party[name])
-    -- Atlas records UnitName's short label. A realm suffix is an identity
-    -- qualifier, unlike the optional display surname seen on Forever.
+    -- Older Atlas logs can have short roster labels. Never strip a realm
+    -- qualifier when looking for such a label.
     if not class and unique and not name:find("-", 1, true) then
         class = plainText(party[short])
     end
@@ -367,7 +367,7 @@ local function atlasLootByItem(runs, itemIdentity)
             local loot, party = clean(run.loot, "table"), clean(run.party, "table")
             if started and last and last >= started and loot then
                 for _, drop in ipairs(loot) do
-                    local winner = clean(drop, "table") and plainText(drop.who)
+                    local winner = clean(drop, "table") and playerName(drop.who)
                     local item = winner and itemIdentity(drop.link)
                     if item then
                         local byWinner = byItem[item] or {}
