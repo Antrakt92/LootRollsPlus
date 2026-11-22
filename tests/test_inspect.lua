@@ -205,4 +205,35 @@ inspect:Ready("B")
 assert(status == "ready" and resultGUID == "B")
 NameUtil, UnitNameUnmodified, Constants = standardNameUtil, nil, nil
 
+clock = 40
+local readsBeforeLateResult = #reads
+local lateResults = 0
+assert(inspect:Request(drop, "Other Mage", "MAGE", function(state, items, guid)
+    lateResults = lateResults + 1
+    receive(state, items, guid)
+end, "B") == "loading")
+local expiredTimer = timers[#timers]
+clock = 46
+inspect:Ready("B")
+assert(status == "timeout" and not result and not resultGUID and #reads == readsBeforeLateResult,
+    "an overdue result must expire even if its timeout callback has not been dispatched")
+expiredTimer()
+assert(lateResults == 1, "an overdue result and its timeout must complete the request only once")
+
+members.player[1], members.party1[1] = "Self", "Self Other"
+assert(inspect:Request(drop, "Self", "MAGE", receive) == "absent",
+    "an unverified bare name can refer to either an exact name or another member's first name")
+assert(inspect:Request(drop, "Self", "MAGE", receive, "P") == nil and status == "ready" and resultGUID == "P",
+    "a verified GUID still identifies the exact player in the same group")
+members.party1[3] = restricted
+assert(inspect:Request(drop, "Self", "MAGE", receive) == "absent",
+    "an unreadable class cannot rule out a same-name candidate")
+members.party1[2], members.party1[3] = restricted, "MAGE"
+assert(inspect:Request(drop, "Self", "MAGE", receive) == "absent",
+    "an unreadable GUID cannot rule out a same-name candidate")
+members.party1[2] = "B"
+members.party1[3] = "WARRIOR"
+assert(inspect:Request(drop, "Self", "MAGE", receive) == nil and status == "ready" and resultGUID == "P",
+    "a verified class can exclude the other first name")
+
 print("Inspect tests passed")

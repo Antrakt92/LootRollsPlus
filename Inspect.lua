@@ -1,5 +1,6 @@
 local _, ns = ...
 local isSecret = issecretvalue or function() return false end
+local INSPECT_TIMEOUT = 5
 
 local slotsByType = {
     INVTYPE_HEAD = {"HeadSlot"}, INVTYPE_NECK = {"NeckSlot"}, INVTYPE_SHOULDER = {"ShoulderSlot"},
@@ -61,23 +62,31 @@ local function findMember(name, class, expectedGUID)
     if isSecret(class) or (class ~= nil and type(class) ~= "string") then return end
     if isSecret(expectedGUID) or (expectedGUID ~= nil
         and (type(expectedGUID) ~= "string" or expectedGUID == "")) then return end
-    local result, guid, multiple, selfShortGUID, alternateShortName
+    local result, guid, multiple, selfShortGUID, unverifiedMatch
     local selfGUID = read(UnitGUID, "player")
     local function consider(unit)
         local candidate = unit == "player" and selfGUID or read(UnitGUID, unit)
-        if type(candidate) ~= "string" or candidate == "" or (unit ~= "player" and candidate == selfGUID) then return end
+        if unit ~= "player" and selfGUID and candidate == selfGUID then return end
         if expectedGUID and candidate ~= expectedGUID then return end
         local match = nameMatch(unit, name)
         if not match then return end
         if class then
             local ok, _, classFile = pcall(UnitClass, unit)
-            if not ok or isSecret(classFile) or classFile ~= class then return end
+            if not ok or isSecret(classFile) or type(classFile) ~= "string" or classFile == "" then
+                unverifiedMatch = true
+                return
+            end
+            if classFile ~= class then return end
+        end
+        if type(candidate) ~= "string" or candidate == "" then
+            unverifiedMatch = true
+            return
         end
         if match == "short" and not expectedGUID then
             if unit == "player" then
                 selfShortGUID = candidate
             else
-                alternateShortName = true
+                unverifiedMatch = true
             end
             return
         end
@@ -92,7 +101,7 @@ local function findMember(name, class, expectedGUID)
             consider((raid and "raid" or "party") .. i)
         end
     end
-    if multiple or (selfShortGUID and (alternateShortName or guid)) then return end
+    if multiple or unverifiedMatch or (selfShortGUID and guid) then return end
     if selfShortGUID then return "player", selfShortGUID end
     return result, guid
 end
@@ -145,7 +154,8 @@ function ns.NewInspect()
         local now = GetTime()
         if lastRequest and now - lastRequest < 2 then return "busy" end
         if read(UnitGUID, unit) ~= guid then return "unavailable" end
-        local request = { unit = unit, guid = guid, slots = names, onResult = onResult }
+        local request = { unit = unit, guid = guid, slots = names, onResult = onResult,
+            deadline = now + INSPECT_TIMEOUT }
         pending, lastRequest = request, now
         local sent = pcall(NotifyInspect, unit)
         if pending ~= request then return end
@@ -153,7 +163,7 @@ function ns.NewInspect()
             pending = nil
             return "unavailable"
         end
-        C_Timer.After(5, function()
+        C_Timer.After(INSPECT_TIMEOUT, function()
             if pending ~= request then return end
             pending = nil
             onResult("timeout")
@@ -165,6 +175,10 @@ function ns.NewInspect()
         local request = pending
         if not request or isSecret(guid) or type(guid) ~= "string" or guid ~= request.guid then return end
         pending = nil
+        if GetTime() >= request.deadline then
+            request.onResult("timeout")
+            return
+        end
         if read(UnitGUID, request.unit) ~= guid or blizzardInspectActive() then
             request.onResult("unavailable")
             return
