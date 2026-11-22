@@ -2311,6 +2311,7 @@ ev:SetScript("OnEvent", function(_, event, a1, a2, ...)
             refresh()
         elseif event == "PLAYER_LEAVING_WORLD" then
             worldReady = false
+            capture:CancelPendingReads()
             liveDemo = nil
             ns.LiveView:Hide()
             inspector:CancelPending()

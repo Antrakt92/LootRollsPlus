@@ -2154,6 +2154,34 @@ for _, scenario in ipairs({"cold", "cold-price", "cached-price", "warm"}) do
     callbacks[pinned]()
     flushTimers()
     assert(card.tooltipLink == pinned, "the deferred comparison should show the loaded item")
+    local prices = {}
+    for _, price in ipairs(card.doubleLines) do prices[price[1]] = price[2] end
+    assert(prices.Disenchant == "~21s", "the pinned card must recover prices after the request cap frees up")
     if warmTooltip then assert(gear.tooltipLink == equipped, "late slot metadata must resume the selected inspection") end
+end
+do
+    local key = 3009
+    LootRollsPlusCharDB.days = {}
+    C_LootHistory.GetSortedDropsForEncounter = function() return {} end
+    loadAddon(true)
+    historyTime = historyTime + 1
+    drops[key] = nil
+    fire("LOOT_HISTORY_UPDATE_DROP", 20, key)
+    fire("PLAYER_LEAVING_WORLD")
+    drops[key] = {lootListKey = key, itemHyperlink = cloth, startTime = historyTime, rollInfos = {}}
+    for _ = 1, 8 do timerNow = timerNow + 0.5; flushTimers() end
+    local function recorded()
+        local count = 0
+        for _, entries in pairs(LootRollsPlusCharDB.days) do
+            for _, entry in ipairs(entries) do
+                if entry.lootListKey == key then count = count + 1 end
+            end
+        end
+        return count
+    end
+    assert(recorded() == 0, "an old delayed read must not record history outside the world")
+    fire("PLAYER_ENTERING_WORLD", false, false)
+    fire("LOOT_HISTORY_UPDATE_DROP", 20, key)
+    assert(recorded() == 1, "a fresh event after entering the world should record the result once")
 end
 print("Addon TOC, event, and UI integration tests passed")

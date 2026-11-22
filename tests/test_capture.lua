@@ -2,6 +2,7 @@ local addonPath = arg[1] or "."
 local ns = {}
 local wall = 100000
 function time() return wall end
+function GetTime() return wall end
 local clock = 500
 local secret = {}
 function issecretvalue(v) return v == secret end
@@ -977,6 +978,197 @@ for _, staleSnapshot in ipairs({"older start", "different item at the same start
     setDrops(activeDrop)
     advance(0.5)
     assert(row[1].done and row[1].winnerValue == 87, "an update must recover from a " .. staleSnapshot)
+end
+
+setDrops()
+engine = new()
+engine:Start()
+local lateFirstDrop = drop(254, clock, {terminalVote}, terminalVote)
+emitDrop(engine, 254)
+assert(#row == 0)
+advance(0.5)
+setDrops(lateFirstDrop)
+advance(0.5)
+assert(#row == 1 and row[1].winnerValue == 87,
+    "a drop missed on its first event must recover without a second event")
+
+for _, boundary in ipairs({"reset", "clear", "future key"}) do
+    setDrops()
+    engine = new()
+    engine:Start()
+    local missed = drop(255, clock, {terminalVote}, terminalVote)
+    emitDrop(engine, 255)
+    if boundary == "reset" then
+        engine:Reset()
+    elseif boundary == "clear" then
+        engine:HandleEvent("LOOT_HISTORY_CLEAR_HISTORY")
+    else
+        missed.startTime = clock + 0.25
+    end
+    setDrops(missed)
+    advance(0.5)
+    assert(#row == 0, "an unbound retry must not cross " .. boundary)
+    emitDrop(engine, 255)
+    assert(#row == 1 and row[1].winnerValue == 87, "a fresh event can confirm the drop after " .. boundary)
+end
+
+setDrops()
+engine = new()
+engine:Start()
+local untrackedReads = 0
+C_LootHistory.GetSortedInfoForDrop = function()
+    untrackedReads = untrackedReads + 1
+end
+emitDrop(engine, 256)
+emitDrop(engine, 256)
+for _ = 1, 8 do advance(0.5) end
+C_LootHistory.GetSortedInfoForDrop = readDrop
+assert(untrackedReads == 6, "repeated unreadable first reads share a bounded retry")
+
+setDrops()
+engine = new()
+engine:Start()
+local readEncounter = C_LootHistory.GetSortedDropsForEncounter
+local encounterReads = 0
+C_LootHistory.GetSortedDropsForEncounter = function(...)
+    encounterReads = encounterReads + 1
+    if encounterReads <= 3 then return secret end
+    return readEncounter(...)
+end
+local missedEncounterDrop = drop(257, clock)
+engine:HandleEvent("LOOT_HISTORY_UPDATE_ENCOUNTER", 7)
+engine:HandleEvent("LOOT_HISTORY_UPDATE_ENCOUNTER", 7)
+advance(0.5)
+setDrops(missedEncounterDrop, drop(258, clock))
+advance(0.5)
+C_LootHistory.GetSortedDropsForEncounter = readEncounter
+assert(encounterReads == 4 and #row == 1 and row[1].lootListKey == 257,
+    "encounter retries must share a window and ignore drops newer than the failed event")
+
+local olderEncounterRow = drop(257, missedEncounterDrop.startTime - 1)
+setDrops(olderEncounterRow)
+engine:HandleEvent("LOOT_HISTORY_UPDATE_ENCOUNTER", 7)
+assert(not row[1].done)
+missedEncounterDrop.winner, missedEncounterDrop.rollInfos = terminalVote, {terminalVote}
+setDrops(missedEncounterDrop)
+advance(0.5)
+assert(row[1].done and row[1].winnerValue == 87 and #row == 1,
+    "an older row in an encounter scan must retry only the matching tracked drop")
+
+setDrops()
+engine = new()
+engine:Start()
+local revised = drop(260, clock, {terminalVote}, terminalVote)
+local sibling = drop(261, clock)
+C_LootHistory.GetSortedDropsForEncounter = function() return nil end
+engine:HandleEvent("LOOT_HISTORY_UPDATE_ENCOUNTER", 7)
+setDrops(revised)
+emitDrop(engine, 260)
+C_LootHistory.GetSortedDropsForEncounter = readEncounter
+local staleVote = roll("Priest", "PRIEST", 3, 3)
+setDrops(drop(260, revised.startTime, {staleVote}, staleVote), sibling)
+advance(0.5)
+assert(#row == 2 and row[1].winnerValue == 87 and row[2].lootListKey == 261,
+    "a direct event supersedes only its own row during the older encounter retry")
+
+for _, revoke in ipairs({"world", "reset", "clear", "expiry", "delayed wake"}) do
+    setDrops()
+    engine = new()
+    engine:Start()
+    local nextDrop = drop(259, clock, {terminalVote}, terminalVote)
+    local refreshes = 0
+    C_LootHistory.GetSortedDropsForEncounter = function() refreshes = refreshes + 1 end
+    engine:HandleEvent("LOOT_HISTORY_UPDATE_ENCOUNTER", 7)
+    if revoke == "world" then
+        engine:CancelPendingReads()
+    elseif revoke == "reset" then
+        engine:Reset()
+    elseif revoke == "clear" then
+        engine:HandleEvent("LOOT_HISTORY_CLEAR_HISTORY")
+    elseif revoke == "expiry" then
+        for _ = 1, 8 do advance(0.5) end
+        assert(refreshes == 5, "an unreadable encounter stops after four retries")
+    end
+    C_LootHistory.GetSortedDropsForEncounter = readEncounter
+    setDrops(nextDrop)
+    advance(revoke == "delayed wake" and 3 or 0.5)
+    assert(#row == 0, "an encounter retry cannot outlive " .. revoke)
+    engine:HandleEvent("LOOT_HISTORY_UPDATE_ENCOUNTER", 7)
+    assert(#row == 1 and row[1].winnerValue == 87)
+end
+
+for _, event in ipairs({"LOOT_HISTORY_UPDATE_DROP", "LOOT_HISTORY_UPDATE_ENCOUNTER"}) do
+    setDrops()
+    engine = new()
+    engine:Start()
+    local firstVote = roll("Priest", "PRIEST", 3, 36)
+    local partial = drop(262, clock, {firstVote})
+    setDrops(partial)
+    emitDrop(engine, 262)
+    partial.rollInfos, partial.winner = secret, terminalVote
+    engine:HandleEvent(event, 7, 262)
+    assert(row[1].done and #row[1].rolls == 1 and row[1].rolls[1].value == 36,
+        "an unreadable list must preserve known votes and readable winner evidence")
+    partial.rollInfos = {terminalVote}
+    advance(0.5)
+    assert(#row == 1 and row[1].rolls[1].value == 87,
+        "an unreadable roll list must retry " .. event)
+end
+
+setDrops()
+engine = new()
+engine:Start()
+local maskedKey = drop(263, clock, {terminalVote}, terminalVote)
+maskedKey.lootListKey = secret
+setDrops(maskedKey)
+engine:HandleEvent("LOOT_HISTORY_UPDATE_ENCOUNTER", 7)
+assert(#row == 0)
+maskedKey.lootListKey = 263
+advance(0.5)
+assert(#row == 1 and row[1].lootListKey == 263 and row[1].winnerValue == 87,
+    "an encounter with a masked key must recover after the key becomes readable")
+
+setDrops()
+engine = new()
+engine:Start()
+local limited = drop(264, clock, {terminalVote})
+setDrops(limited)
+emitDrop(engine, 264)
+local onlyPartial = drop(264, clock)
+onlyPartial.startTime = secret
+C_LootHistory.GetSortedDropsForEncounter = function() return nil end
+engine:HandleEvent("LOOT_HISTORY_UPDATE_ENCOUNTER", 7)
+for _ = 1, 3 do advance(0.5) end
+C_LootHistory.GetSortedDropsForEncounter = readEncounter
+setDrops(onlyPartial)
+advance(0.5)
+limited.winner = terminalVote
+setDrops(limited)
+advance(0.5)
+assert(not row[1].done, "a per-key retry spawned by an encounter cannot extend the original deadline")
+emitDrop(engine, 264)
+assert(row[1].done and row[1].winnerValue == 87)
+
+for _, event in ipairs({"LOOT_HISTORY_UPDATE_DROP", "LOOT_HISTORY_UPDATE_ENCOUNTER"}) do
+    for _, expire in ipairs({false, true}) do
+        setDrops()
+        engine = new()
+        engine:Start()
+        C_LootHistory.GetSortedDropsForEncounter = function() return nil end
+        engine:HandleEvent(event, 7, 265)
+        advance(0.25)
+        local newer = drop(265, clock, {terminalVote}, terminalVote)
+        engine:HandleEvent(event, 7, 265)
+        C_LootHistory.GetSortedDropsForEncounter = readEncounter
+        setDrops(newer)
+        advance(expire and 2 or 0.25)
+        if expire then
+            assert(#row == 0, "a later event must not renew an existing retry's absolute deadline")
+        else
+            assert(#row == 1 and row[1].winnerValue == 87,
+                "a newer explicit event must allow an unseen row that started before it")
+        end
+    end
 end
 
 print("Capture tests passed")

@@ -401,6 +401,8 @@ function ns.NewCapture(callbacks)
         and type(api.GetSortedInfoForDrop) == "function"
         and type(api.GetSortedDropsForEncounter) == "function"
     local seen = {}
+    local readRetries = setmetatable({}, { __mode = "k" })
+    local encounterRetry = {}
     local participantGUIDs = setmetatable({}, { __mode = "k" })
     local captureStart
     local started = false
@@ -804,7 +806,7 @@ function ns.NewCapture(callbacks)
         return info and nonempty(info.encounterName)
     end
 
-    local function snapshotDrop(encounterID, lootListKey, raw, sourceName, baseline, encounterDrops)
+    local function snapshotDrop(encounterID, lootListKey, raw, sourceName, baseline, encounterDrops, retry)
         if not clean(raw, "table") then return end
         local link, identity = itemLink(raw.itemHyperlink)
         local startTime = clean(raw.startTime, "number")
@@ -814,6 +816,7 @@ function ns.NewCapture(callbacks)
 
         local drops = bucket(encounterID)
         local slot = drops[lootListKey]
+        local originalSlot = slot
         if slot and startTime < slot.startTime then return end
         if slot and (slot.identity ~= identity or slot.startTime ~= startTime) then
             if slot.startTime == startTime then return end
@@ -834,8 +837,18 @@ function ns.NewCapture(callbacks)
             slot.ignored = not slot.entry and (baseline
                 or (captureStart and startTime < captureStart))
         end
-        if slot.ignored then return end
-        slot.readRetry = nil
+        if slot.ignored then return true end
+        local rollInfos = clean(raw.rollInfos, "table")
+        local retries = readRetries[drops]
+        if retries then
+            if rollInfos or (slot ~= originalSlot and retries[lootListKey] ~= retry) then
+                retries[lootListKey] = nil
+            end
+            -- An individual update supersedes only this row of an older encounter read.
+            if not encounterDrops and retries[encounterRetry] then
+                retries[encounterRetry].confirmed[lootListKey] = true
+            end
+        end
         local previous = slot.entry
         local isNew = previous == nil
         local wasDone = previous and previous.done
@@ -890,7 +903,7 @@ function ns.NewCapture(callbacks)
             entry.startTime = slot.startTime
             changed = true
         end
-        local rolls = readRolls(raw.rollInfos, states, entry.rolls,
+        local rolls = readRolls(rollInfos, states, entry.rolls,
             not entry.done and not entry.closed and not baseline, slot.playersByGUID, presentationWinner)
         if rolls and not sameRolls(entry.rolls, rolls) then
             entry.rolls = rolls
@@ -988,47 +1001,110 @@ function ns.NewCapture(callbacks)
             rememberNativeCompletion(slot, observedAt)
         end
         if changed or bindingsChanged then callbacks.onDrop(entry, isNew, baseline) end
+        return rollInfos ~= nil
     end
 
-    local function scanEncounter(encounterID, baseline)
-        local drops = clean(read(api.GetSortedDropsForEncounter, encounterID), "table")
-        if not drops then return end
-        local sourceName = getSourceName(encounterID)
-        for _, raw in ipairs(drops) do
-            local drop = clean(raw, "table")
-            local lootListKey = drop and id(drop.lootListKey)
-            if lootListKey then snapshotDrop(encounterID, lootListKey, drop, sourceName, baseline, drops) end
+    local function readDropMetadata(drop)
+        local startTime = clean(drop.startTime, "number")
+        local _, identity = itemLink(drop.itemHyperlink)
+        return startTime, identity
+    end
+
+    local function retryRead(encounterID, drops, key, readAgain, deadline, marker)
+        if not canSchedule then return end
+        local now = GetTime()
+        local expires = deadline or (now + DROP_RETRY_INTERVAL * DROP_READ_RETRIES)
+        if now + DROP_RETRY_INTERVAL > expires then return end
+        local retries = readRetries[drops] or {}
+        if retries[key] then return end
+        readRetries[drops] = retries
+        local retry = marker or {}
+        local remaining = DROP_READ_RETRIES
+        retries[key] = retry
+        local function refresh()
+            if readRetries[drops] ~= retries or retries[key] ~= retry then return end
+            local current = GetTime()
+            if seen[encounterID] ~= drops or current > expires or readAgain(retry, expires)
+                or remaining == 1 or current + DROP_RETRY_INTERVAL > expires then
+                retries[key] = nil
+                return
+            end
+            remaining = remaining - 1
+            _G.C_Timer.After(DROP_RETRY_INTERVAL, refresh)
         end
+        _G.C_Timer.After(DROP_RETRY_INTERVAL, refresh)
     end
 
     local function readUpdatedDrop(encounterID, lootListKey)
         local drop = clean(read(api.GetSortedInfoForDrop, encounterID, lootListKey), "table")
         if not drop or id(drop.lootListKey) ~= lootListKey then return end
-        local startTime = clean(drop.startTime, "number")
-        local _, identity = itemLink(drop.itemHyperlink)
+        local startTime, identity = readDropMetadata(drop)
         if startTime and identity then return drop, startTime, identity end
     end
 
-    local function retryDropUpdate(encounterID, lootListKey, slot)
-        if not canSchedule or not slot or slot.ignored or slot.readRetry then return end
-        local retry = {}
-        local remaining = DROP_READ_RETRIES
-        slot.readRetry = retry
-        local function refresh()
-            if slot.readRetry ~= retry or not seen[encounterID] or seen[encounterID][lootListKey] ~= slot then return end
+    local function staleDrop(slot, startTime, identity)
+        return slot and (startTime < slot.startTime or (startTime == slot.startTime and identity ~= slot.identity))
+    end
+
+    local function retryDropUpdate(encounterID, lootListKey, slot, deadline)
+        if slot and slot.ignored then return end
+        local drops = bucket(encounterID)
+        -- An unreadable first event can only authorize a drop that already existed.
+        local startLimit = slot and slot.startTime or clean(read(api.GetLootHistoryTime), "number")
+        if not startLimit then return end
+        local retries = readRetries[drops]
+        local pending = retries and retries[lootListKey]
+        if pending then
+            -- Fresh events may authorize a later unseen start without extending the retry.
+            if not slot and not deadline then pending.startLimit = math.max(pending.startLimit, startLimit) end
+            return
+        end
+        retryRead(encounterID, drops, lootListKey, function(retry)
+            if drops[lootListKey] ~= slot then return true end
             local drop, startTime, identity = readUpdatedDrop(encounterID, lootListKey)
-            if drop and startTime > slot.startTime then
-                slot.readRetry = nil
-            elseif drop and startTime == slot.startTime and identity == slot.identity then
-                snapshotDrop(encounterID, lootListKey, drop, getSourceName(encounterID), false)
-            elseif remaining > 1 then
-                remaining = remaining - 1
-                _G.C_Timer.After(DROP_RETRY_INTERVAL, refresh)
-            else
-                slot.readRetry = nil
+            if not drop or staleDrop(slot, startTime, identity) then return false end
+            if startTime <= retry.startLimit then
+                local complete = snapshotDrop(encounterID, lootListKey, drop, getSourceName(encounterID), false, nil, retry)
+                slot = drops[lootListKey]
+                return complete
+            end
+            return true
+        end, deadline, {startLimit = startLimit})
+    end
+
+    local function scanEncounter(encounterID, baseline, startLimit, confirmed, deadline)
+        local rows = clean(read(api.GetSortedDropsForEncounter, encounterID), "table")
+        if not rows then return false end
+        local sourceName = getSourceName(encounterID)
+        local drops = bucket(encounterID)
+        local complete = true
+        for _, raw in ipairs(rows) do
+            local drop = clean(raw, "table")
+            local lootListKey = drop and id(drop.lootListKey)
+            if not lootListKey then
+                complete = false
+            elseif not confirmed or not confirmed[lootListKey] then
+                local startTime, identity = readDropMetadata(drop)
+                local slot = drops[lootListKey]
+                if not startTime or not identity or staleDrop(slot, startTime, identity) then
+                    if not baseline then
+                        if not startLimit or slot then
+                            retryDropUpdate(encounterID, lootListKey, slot, deadline)
+                        else
+                            complete = false
+                        end
+                    end
+                elseif not startLimit or startTime <= startLimit then
+                    local readable = snapshotDrop(encounterID, lootListKey, drop, sourceName, baseline, rows)
+                    if readable then
+                        if confirmed then confirmed[lootListKey] = true end
+                    elseif not baseline then
+                        retryDropUpdate(encounterID, lootListKey, drops[lootListKey], deadline)
+                    end
+                end
             end
         end
-        _G.C_Timer.After(DROP_RETRY_INTERVAL, refresh)
+        return complete
     end
 
     local function baseline()
@@ -1046,6 +1122,10 @@ function ns.NewCapture(callbacks)
         if started then return end
         started = true
         if available then baseline() end
+    end
+
+    function engine:CancelPendingReads()
+        readRetries = setmetatable({}, { __mode = "k" })
     end
 
     function engine:Reset()
@@ -1105,18 +1185,38 @@ function ns.NewCapture(callbacks)
         local encounterID = id(arg1)
         if not encounterID then return end
         if event == "LOOT_HISTORY_UPDATE_ENCOUNTER" then
-            scanEncounter(encounterID, false)
+            local drops = bucket(encounterID)
+            local confirmed = {}
+            if scanEncounter(encounterID, false, nil, confirmed) then
+                local retries = readRetries[drops]
+                if retries then retries[encounterRetry] = nil end
+            else
+                local startLimit = clean(read(api.GetLootHistoryTime), "number")
+                if startLimit then
+                    local retries = readRetries[drops]
+                    local older = retries and retries[encounterRetry]
+                    if older then
+                        older.startLimit = math.max(older.startLimit, startLimit)
+                        for key in pairs(confirmed) do older.confirmed[key] = true end
+                    else
+                        retryRead(encounterID, drops, encounterRetry, function(retry, deadline)
+                            return scanEncounter(encounterID, false, retry.startLimit, retry.confirmed, deadline)
+                        end, nil, {startLimit = startLimit, confirmed = confirmed})
+                    end
+                end
+            end
         elseif event == "LOOT_HISTORY_UPDATE_DROP" then
             local lootListKey = id(arg2)
             if not lootListKey then return end
             local drop, startTime, identity = readUpdatedDrop(encounterID, lootListKey)
             local slot = seen[encounterID] and seen[encounterID][lootListKey]
-            if not drop or (slot and (startTime < slot.startTime
-                or (startTime == slot.startTime and identity ~= slot.identity))) then
+            if not drop or staleDrop(slot, startTime, identity) then
                 retryDropUpdate(encounterID, lootListKey, slot)
                 return
             end
-            snapshotDrop(encounterID, lootListKey, drop, getSourceName(encounterID), false)
+            if not snapshotDrop(encounterID, lootListKey, drop, getSourceName(encounterID), false) then
+                retryDropUpdate(encounterID, lootListKey, seen[encounterID][lootListKey])
+            end
         end
     end
 

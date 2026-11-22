@@ -407,6 +407,27 @@ advance()
 assert(#expect(source, 601).rolls == 1, "a later event can recover after the retry window")
 
 for _, event in ipairs({"LOOT_HISTORY_UPDATE_DROP", "LOOT_HISTORY_UPDATE_ENCOUNTER"}) do
+    for _, field in ipairs({"itemHyperlink", "startTime", "rollInfos"}) do
+        reset()
+        popup(606, 1, link)
+        local currentDrop = drop(17, clock, link, {need})
+        local fullValue = currentDrop[field]
+        source = newSource()
+        advance(3)
+        currentDrop[field] = secret
+        drops[77] = {currentDrop}
+        emit(event, 77, 17)
+        advance()
+        assert(#expect(source, 606).rolls == 0, "a partial first snapshot must not invent votes")
+        currentDrop[field] = fullValue
+        advance(0.6)
+        local recovered = expect(source, 606)
+        assert(#recovered.rolls == 1 and recovered.rolls[1].name == "Mage",
+            "a partial first snapshot must retry " .. field .. " after " .. event)
+    end
+end
+
+for _, event in ipairs({"LOOT_HISTORY_UPDATE_DROP", "LOOT_HISTORY_UPDATE_ENCOUNTER"}) do
     reset()
     local startedAt = clock
     local originalAnchor = popup(607, 1, link)

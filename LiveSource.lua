@@ -156,28 +156,29 @@ local function readHistory(api, interests, bindings, updates, previous, retries,
         if not interests[identity] then drops[identity] = nil end
     end
     local function collect(encounter, raw)
-        if not clean(raw, "table") then return end
+        if not clean(raw, "table") then return false end
         local lootKey = key(raw.lootListKey)
         local identity = itemLink(raw.itemHyperlink)
         local start = number(raw.startTime)
-        if not lootKey then return end
+        if not lootKey or not identity then return false end
         local historyKey = encounter .. ":" .. lootKey
         local binding = bindings[historyKey]
         -- A key's item cannot change within one generation. Retry an
         -- unreadable or older generation as well.
-        if binding and (not start or not identity or start < binding.historyStart
+        if binding and (not start or start < binding.historyStart
             or (start == binding.historyStart and identity ~= binding.identity)) then return false end
-        local popupStart = identity and interests[identity]
-        if not start or not popupStart or math.abs(start - popupStart) > START_TOLERANCE then
-            return
-        end
+        local popupStart = interests[identity]
+        if not popupStart then return end
+        if not start then return false end
+        if math.abs(start - popupStart) > START_TOLERANCE then return end
         local winner = clean(raw.winner, "table")
+        local rollInfos = clean(raw.rollInfos, "table")
         local allPassed = clean(raw.allPassed, "boolean") == true
         local winningRoll, marked
         if winner or not allPassed then
             local guid = winner and clean(winner.playerGUID, "string")
             if winner and isSecret(winner.playerGUID) then guid = false end
-            winningRoll, marked = ns.FindWinningLootRoll(raw.rollInfos, winner and clean(winner.playerName, "string"),
+            winningRoll, marked = ns.FindWinningLootRoll(rollInfos, winner and clean(winner.playerName, "string"),
                 guid, winner and clean(winner.playerClass, "string"))
         end
         local choices = drops[identity] or {}
@@ -187,12 +188,13 @@ local function readHistory(api, interests, bindings, updates, previous, retries,
             encounter = encounter,
             lootKey = lootKey,
             start = start,
-            raw = raw,
+            rollInfos = rollInfos,
             winner = winner,
             winningRoll = winningRoll,
             allPassed = allPassed,
             finished = winner ~= nil or allPassed or marked == true,
         }
+        if not rollInfos then return false end
     end
 
     local function scan(encounter)
@@ -462,7 +464,6 @@ function Source:Refresh(scanHistory)
                 rolls = {}, allPassed = false, ambiguous = ambiguous,
             }
             if candidate then
-                local raw = candidate.raw
                 local winner = player(candidate.winner, states)
                 local winningRoll = player(candidate.winningRoll, states)
                 if winner and winningRoll then
@@ -474,7 +475,7 @@ function Source:Refresh(scanHistory)
                     end
                 end
                 row.winner = winner or winningRoll
-                local rolls = clean(raw.rollInfos, "table")
+                local rolls = candidate.rollInfos
                 for _, data in ipairs(rolls or {}) do
                     local roll = player(data, states)
                     if roll and roll.state then
