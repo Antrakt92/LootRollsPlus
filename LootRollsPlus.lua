@@ -16,7 +16,7 @@ local refresh, queueRefresh, toggleDetails, UpdateVisibility
 local RenderLiveRolls, PlaceComparison
 local hoverRow
 local worldReady
-local comparisonNeedsItem
+local comparisonNeedsItem, liveItemRequestStarved
 local activeEntries = {}
 local nextActiveOrder = 0
 local isSecret = issecretvalue or function() return false end
@@ -230,7 +230,8 @@ local function RequestItemData(link)
                 C_Timer.After(15, function()
                     if pendingItems[link] ~= request then return end
                     ClearItemRequest(link)
-                    if comparisonNeedsItem and (comparisonNeedsItem(link, request) or comparisonNeedsItem()) then
+                    if liveItemRequestStarved
+                        or comparisonNeedsItem and (comparisonNeedsItem(link, request) or comparisonNeedsItem()) then
                         queueRefresh()
                     end
                 end)
@@ -1600,11 +1601,16 @@ local function LiveComparisonCard(comparison)
     if matches == 1 then return card end
 end
 
-local function InspectLivePlayer(comparison, player, retries)
+local function InspectLivePlayer(comparison, player, retryUntil)
     if liveComparison ~= comparison then return end
     if not LiveComparisonCard(comparison) then details:Hide() return end
     if player.guid == false then
         comparison.state = "unavailable"
+        DrawComparison()
+        return
+    end
+    if GetTime() > retryUntil then
+        comparison.state = "busy"
         DrawComparison()
         return
     end
@@ -1615,9 +1621,9 @@ local function InspectLivePlayer(comparison, player, retries)
         DrawComparison()
     end, player.guid)
     if not state then return end
-    if state == "busy" and retries > 0 then
+    if state == "busy" and GetTime() + 0.5 <= retryUntil then
         comparison.state = "loading"
-        C_Timer.After(0.5, function() InspectLivePlayer(comparison, player, retries - 1) end)
+        C_Timer.After(0.5, function() InspectLivePlayer(comparison, player, retryUntil) end)
     else
         comparison.state = state
     end
@@ -1657,7 +1663,7 @@ ns.LiveView.OnPlayerClick = function(card, entry, player, owner)
                 return
             end
         end
-        InspectLivePlayer(comparison, player, 14)
+        InspectLivePlayer(comparison, player, GetTime() + 7)
         return
     end
     DrawComparison()
@@ -1727,6 +1733,7 @@ refresh = function(key)
         if droppedTooltip.waitingForCapacity then RequestItemData(droppedTooltip.requestedLink) end
         if equippedTooltip.waitingForCapacity then RequestItemData(equippedTooltip.requestedLink) end
     end
+    if liveItemRequestStarved then RenderLiveRolls() end
     DrawMain()
     if hist:IsShown() then
         local changedDay = EnsureSelected()
@@ -1787,7 +1794,10 @@ end
 local liveDemo
 local function LiveItemHasSlot(link)
     local hasSlot, pending = ns.HasInspectSlot(link)
-    if pending then RequestItemData(link) end
+    if pending then
+        local _, atCapacity = RequestItemData(link)
+        liveItemRequestStarved = liveItemRequestStarved or atCapacity
+    end
     return hasSlot
 end
 
@@ -1805,6 +1815,7 @@ ns.LiveView.KeepRosterOpen = function(roster, focus)
 end
 
 RenderLiveRolls = function()
+    liveItemRequestStarved = nil
     local rolls = ns.LiveSource:GetRolls()
     if #rolls > 0 then liveDemo = nil end
     local warnings = {}

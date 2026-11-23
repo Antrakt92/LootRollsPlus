@@ -1516,6 +1516,23 @@ flushTimers()
 assert(inspectedUnit == "party1", "the current selection should retry after the throttle")
 fire("INSPECT_READY", "Player-Mage")
 assert(liveGear.tooltipLink == memberItem)
+live.rows[1]:GetScript("OnClick")(live.rows[1])
+inspectedUnit = nil
+live.rows[1]:GetScript("OnClick")(live.rows[1])
+assert(not inspectedUnit, "the retry must start while inspection is throttled")
+timerNow = timerNow + 8
+flushTimers()
+contains(liveGear.value, "Inspection in progress")
+-- Independently queued history capture can inspect the same player.
+if inspectedUnit then fire("INSPECT_READY", "Player-Mage") end
+timerNow = timerNow + 2
+flushTimers()
+inspectedUnit = nil
+live.rows[1]:GetScript("OnClick")(live.rows[1])
+live.rows[1]:GetScript("OnClick")(live.rows[1])
+assert(inspectedUnit == "party1", "a fresh click should still request inspection")
+fire("INSPECT_READY", "Player-Mage")
+assert(liveGear.tooltipLink == memberItem)
 nativeLootFrame.mockLeft, nativeLootFrame.mockRight = 350, 627
 nativeLootFrame.mockBottom, nativeLootFrame.mockTop = 400, 500
 live.mockLeft, live.mockRight, live.mockBottom, live.mockTop = 180, 345, 395, 505
@@ -2122,6 +2139,18 @@ for _, scenario in ipairs({"cold", "cold-price", "cached-price", "warm"}) do
     local _, _, itemScroll = openHistory()
     local row = nextVisibleRow(itemScroll.scrollChild)
     assert(row.entry.link == pinned and not callbacks[pinned])
+    if warmTooltip then
+        (function()
+            local liveCold = "|cnIQ2:|Hitem:30002::::::::|h[Cold live item]|h|r"
+            local prompt = CreateFrame("Frame", nil, UIParent)
+            prompt.mockLeft, prompt.mockRight, prompt.mockBottom, prompt.mockTop = 400, 650, 240, 320
+            LootRollsPlusDB.liveRolls = true
+            latestNS.LiveSource:Publish({{id = 3010, anchor = prompt, link = liveCold, rolls = {
+                {name = "Self", class = "PALADIN", state = "greed", isSelf = true},
+            }}})
+            assert(not callbacks[liveCold], "the live item must also respect the full request cap")
+        end)()
+    end
     local card, gear = LootRollsPlusDroppedTooltip, LootRollsPlusEquippedTooltip
     card.failHyperlink = not warmTooltip
     mastercraftEnabled, mastercraftLoadingOnly = true, nil
@@ -2139,6 +2168,8 @@ for _, scenario in ipairs({"cold", "cold-price", "cached-price", "warm"}) do
     flushTimers()
     assert(callbacks[pinned], "a pinned card must retry once the item request cap frees up")
     if warmTooltip then
+        assert(callbacks["|cnIQ2:|Hitem:30002::::::::|h[Cold live item]|h|r"],
+            "a live item must retry once the item request cap frees up")
         timerNow = timerNow + 15
         flushTimers()
         flushTimers()
