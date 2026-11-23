@@ -52,7 +52,8 @@ local function nameMatch(unit, name)
     if full == name then return "exact" end
     local nameMethod = UnitNameUnmodified or UnitName
     local ok, short, surname = pcall(nameMethod, unit)
-    if not ok or isSecret(short) or short ~= name or isSecret(surname) then return end
+    if not ok or isSecret(short) or short ~= name then return end
+    if isSecret(surname) then return "unverified" end
     if (type(full) ~= "string" or full == "") and (surname == nil or surname == "") then return "exact" end
     return "short"
 end
@@ -78,7 +79,7 @@ local function findMember(name, class, expectedGUID)
             end
             if classFile ~= class then return end
         end
-        if type(candidate) ~= "string" or candidate == "" then
+        if match == "unverified" or type(candidate) ~= "string" or candidate == "" then
             unverifiedMatch = true
             return
         end

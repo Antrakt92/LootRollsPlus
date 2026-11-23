@@ -236,4 +236,17 @@ members.party1[3] = "WARRIOR"
 assert(inspect:Request(drop, "Self", "MAGE", receive) == nil and status == "ready" and resultGUID == "P",
     "a verified class can exclude the other first name")
 
+members.party1[3] = "MAGE"
+NameUtil = {GetUnmodifiedUnitFullName = function(unit)
+    if unit == "player" then return "Self" end
+end}
+UnitNameUnmodified = function(unit)
+    return "Self", unit == "party1" and restricted or nil
+end
+assert(inspect:Request(drop, "Self", "MAGE", receive) == "absent",
+    "an unreadable surname cannot rule out a same-name candidate")
+assert(inspect:Request(drop, "Self", "MAGE", receive, "P") == nil and status == "ready" and resultGUID == "P",
+    "the verified GUID disambiguates the match even when another surname is unreadable")
+NameUtil, UnitNameUnmodified = standardNameUtil, nil
+
 print("Inspect tests passed")
