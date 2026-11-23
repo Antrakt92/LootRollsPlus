@@ -148,6 +148,32 @@ assert(History.NewVisits(oldState):Update(189, "Library", 32, true).id == 14)
 assert(History.NewVisits(oldState):Update(nil, nil, 33, true) == nil)
 assert(History.NewVisits(oldState):Update(189, "Library", 34, false).id == 15)
 
+local archivedVisit = {id = 19, name = "Library", startedAt = 15}
+local archivedDays = {[day] = {
+    {link = link, t = 20, visit = archivedVisit},
+    {link = link, t = 21, visit = {id = "200", name = "Armory", startedAt = 16}},
+    {link = link, t = 22, visit = {id = math.huge, name = "Armory", startedAt = 17}},
+    {link = link, t = 23, visit = {id = 999, name = "Armory", startedAt = 30}},
+    {link = link, t = 24, visit = {id = 1e100, name = "Armory", startedAt = 17}},
+}}
+local maxArchivedVisit = History.NormalizeDays(archivedDays, dateKey)
+assert(maxArchivedVisit == archivedVisit.id, "only valid historical visits can advance the visit counter")
+for _, lastID in ipairs({false, 2, 30, 1e100}) do
+    local restored = {days = archivedDays, lastVisitID = lastID}
+    local resumed = History.NewVisits(restored, maxArchivedVisit):Update(189, "Library", 32, true)
+    assert(resumed.id == (lastID == 30 and 31 or 20),
+        "a restored history must not reuse an archived dungeon visit ID")
+end
+local staleVisit = {id = 7, instanceID = 189, name = "Library", startedAt = 10}
+assert(History.NewVisits({currentVisit = staleVisit}, maxArchivedVisit):Update(189, "Library", 32, true).id == 20,
+    "a restored current visit older than the archive cannot be resumed")
+local currentVisit = {id = 20, instanceID = 189, name = "Library", startedAt = 30}
+assert(History.NewVisits({currentVisit = currentVisit}, maxArchivedVisit):Update(189, "Library", 32, true) == currentVisit,
+    "an intact saved current visit still resumes after reloading")
+local exhausted = History.NewVisits({lastVisitID = 2 ^ 53 - 2}, maxArchivedVisit)
+assert(exhausted:Update(189, "Library", 31, false).id == 2 ^ 53 - 1)
+assert(not exhausted:Update(189, "Armory", 32, false), "allocating past Lua's exact range must not reuse an ID")
+
 local winner = {link = link, winner = "Bear Dillinger", t = 120, legacy = true, rolls = {
     {name = "Bear Dillinger"}, {name = "Other Player"}, {name = "Self"},
     {name = "Same First"}, {name = "Same Second"}, {name = "Self Surname"}, {name = "Cross-Realm"},

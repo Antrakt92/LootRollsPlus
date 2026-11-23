@@ -157,8 +157,15 @@ local function normalizeInspections(inspections)
 end
 
 local entryFlags = {"legacy", "done", "allpassed", "closed", "stale", "ambiguous"}
+local MAX_VISIT_ID = 2 ^ 53 - 1
+
+local function validVisitID(value)
+    local id = positiveInteger(value)
+    if id and id <= MAX_VISIT_ID then return id end
+end
 
 function History.NormalizeDays(days, dateKey)
+    local maxVisitID = 0
     local function normalizeEntry(entry)
         if not clean(entry, "table") or not itemLink(entry.link) then return end
         local timestamp, day = validTimestamp(entry.t, dateKey)
@@ -170,7 +177,12 @@ function History.NormalizeDays(days, dateKey)
         for _, field in ipairs(entryFlags) do entry[field] = clean(entry[field], "boolean") end
         local visit = clean(entry.visit, "table")
         local started = visit and validTimestamp(visit.startedAt, dateKey)
-        if not started or started > timestamp or not positiveInteger(visit.id) or not plainText(visit.name) then entry.visit = nil end
+        local visitID = visit and validVisitID(visit.id)
+        if started and started <= timestamp and visitID and plainText(visit.name) then
+            maxVisitID = math.max(maxVisitID, visitID)
+        else
+            entry.visit = nil
+        end
         entry.inspections = clean(entry.inspections, "table")
         if entry.inspections then normalizeInspections(entry.inspections) end
         entry.rolls = clean(entry.rolls, "table") or {}
@@ -206,6 +218,7 @@ function History.NormalizeDays(days, dateKey)
     for day, entries in pairs(moved) do
         days[day] = mergeEntries(days[day] or {}, entries)
     end
+    return maxVisitID
 end
 
 local function copyRoll(original)
@@ -281,12 +294,14 @@ function History.Import(charDB, upstreamCharDB, dateKey)
     return true
 end
 
-function History.NewVisits(charDB)
+function History.NewVisits(charDB, archivedVisitID)
     local current
     local initialized = false
     local previous = clean(charDB.currentVisit, "table")
-    local previousID = previous and positiveInteger(previous.id) or 0
-    local lastID = math.max(positiveInteger(charDB.lastVisitID) or 0, previousID)
+    local previousID = previous and validVisitID(previous.id) or 0
+    archivedVisitID = validVisitID(archivedVisitID) or 0
+    if previousID < archivedVisitID then previous = nil end
+    local lastID = math.max(validVisitID(charDB.lastVisitID) or 0, previousID, archivedVisitID)
     charDB.lastVisitID = lastID
     local controller = {}
 
@@ -297,14 +312,16 @@ function History.NewVisits(charDB)
         initialized, previous = true, nil
         if not (instanceID and name and now) then
             current = nil
-        elseif candidate and positiveInteger(candidate.id) and positiveInteger(candidate.startedAt)
+        elseif candidate and validVisitID(candidate.id) and positiveInteger(candidate.startedAt)
             and candidate.startedAt <= now and clean(candidate.instanceID, "number") == instanceID
             and plainText(candidate.name) == name then
             current = candidate
-        else
+        elseif lastID < MAX_VISIT_ID then
             lastID = lastID + 1
             charDB.lastVisitID = lastID
             current = {id = lastID, instanceID = instanceID, name = name, startedAt = now}
+        else
+            current = nil
         end
         charDB.currentVisit = current
         return current

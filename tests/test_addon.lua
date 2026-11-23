@@ -2184,4 +2184,14 @@ do
     fire("LOOT_HISTORY_UPDATE_DROP", 20, key)
     assert(recorded() == 1, "a fresh event after entering the world should record the result once")
 end
+do
+    instanceID = 189
+    local previousVisit = {id = 52, startedAt = wallTime - 20, name = "Scarlet Monastery", instanceID = instanceID}
+    local archived = {t = wallTime - 10, link = cloth, done = true, allpassed = true, visit = previousVisit}
+    LootRollsPlusCharDB.days = {[date("%Y-%m-%d", wallTime)] = {archived}}
+    LootRollsPlusCharDB.lastVisitID, LootRollsPlusCharDB.currentVisit = nil, nil
+    loadAddon(true)
+    assert(LootRollsPlusCharDB.currentVisit.id > archived.visit.id,
+        "archived visit IDs must seed the allocator during normal addon load")
+end
 print("Addon TOC, event, and UI integration tests passed")

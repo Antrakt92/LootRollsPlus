@@ -2288,8 +2288,7 @@ ev:SetScript("OnEvent", function(_, event, a1, a2, ...)
             db.visibleRows, db.historyHeight = nil, nil
             if type(charDB.days) ~= "table" then charDB.days = {} end
             days = charDB.days
-            ns.History.NormalizeDays(days, DayKey)
-            visits = ns.History.NewVisits(charDB)
+            visits = ns.History.NewVisits(charDB, ns.History.NormalizeDays(days, DayKey))
             capture = ns.NewCapture({ onDrop = RecordDrop, onRemove = RemoveDrop, getExisting = FindSavedDrop })
             RebuildDayKeys()
             TryImport()
