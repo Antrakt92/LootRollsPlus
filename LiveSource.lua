@@ -541,9 +541,22 @@ function Source:OnEvent(event, first, second)
             local api = clean(_G.C_LootHistory, "table") or {}
             local link = clean(read(_G.GetLootRollItemLink, id), "string")
             local identity = itemLink(link)
+            local historyTime = number(read(api.GetLootHistoryTime))
             local observation = self.observations[id] or {}
-            if identity and observation.identity and identity ~= observation.identity then observation = {} end
-            updateObservationStart(observation, id, number(read(api.GetLootHistoryTime)), second, true)
+            if identity and observation.identity and identity ~= observation.identity then
+                observation = {}
+            elseif confirmedStart(observation) then
+                local timing = {}
+                updateObservationStart(timing, id, historyTime, second)
+                -- A clean countdown can prove ID reuse before a cancel reaches us.
+                if timing.start and timing.start - observation.start > START_TOLERANCE then
+                    if observation.historyKey then
+                        timing.retiredHistory = { [observation.historyKey] = observation.historyStart }
+                    end
+                    observation = timing
+                end
+            end
+            updateObservationStart(observation, id, historyTime, second, true)
             observation.seenAt = number(read(_G.GetTime))
             if identity then observation.identity, observation.link = identity, link end
             self.retired[id] = nil

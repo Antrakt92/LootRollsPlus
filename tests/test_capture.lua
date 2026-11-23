@@ -1202,4 +1202,98 @@ for _, scenario in ipairs({"same-generation update", "recycled key", "stale firs
     end
 end
 
+for _, route in ipairs({"drop", "drop while retrying", "encounter", "encounter retry", "ignored previous"}) do
+    local original = drop(280, clock)
+    if route == "ignored previous" then setDrops(original) else setDrops() end
+    engine = new()
+    engine:Start()
+    setDrops(original)
+    emitDrop(engine, 280)
+    local oldCount = #row
+    advance(1)
+    if route == "drop while retrying" then
+        setDrops()
+        emitDrop(engine, 280)
+    end
+
+    local newDrop = drop(280, clock, {terminalVote}, terminalVote)
+    local fullLink = newDrop.itemHyperlink
+    newDrop.itemHyperlink = secret
+    setDrops(newDrop)
+    if route == "encounter retry" then
+        C_LootHistory.GetSortedDropsForEncounter = function() return secret end
+        engine:HandleEvent("LOOT_HISTORY_UPDATE_ENCOUNTER", 7)
+        C_LootHistory.GetSortedDropsForEncounter = readEncounter
+        advance(0.5)
+    elseif route == "encounter" then
+        engine:HandleEvent("LOOT_HISTORY_UPDATE_ENCOUNTER", 7)
+    else
+        emitDrop(engine, 280)
+    end
+    setDrops(original)
+    advance(0.5)
+    assert(#row == oldCount and (oldCount == 0 or not row[1].done), "an older generation cannot consume a newer retry")
+    newDrop.itemHyperlink = fullLink
+    setDrops(newDrop)
+    advance(0.5)
+    assert(#row == oldCount + 1 and row[#row].winnerValue == 87,
+        "recover the readable generation start after a temporarily masked item via " .. route)
+end
+
+setDrops()
+engine = new()
+engine:Start()
+local waitingForLink = drop(281, clock)
+waitingForLink.itemHyperlink = secret
+setDrops(waitingForLink)
+emitDrop(engine, 281)
+local unrelatedStart = drop(281, clock + 0.25, {terminalVote}, terminalVote)
+setDrops(unrelatedStart)
+advance(0.5)
+assert(#row == 0, "a clean start with a masked link cannot authorize a further generation")
+emitDrop(engine, 281)
+assert(#row == 1 and row[1].winnerValue == 87, "a fresh event can confirm the further generation")
+
+for _, event in ipairs({"LOOT_HISTORY_UPDATE_DROP", "LOOT_HISTORY_UPDATE_ENCOUNTER"}) do
+    setDrops()
+    engine = new()
+    engine:Start()
+    local previous = drop(282, clock)
+    setDrops(previous)
+    emitDrop(engine, 282)
+    advance(1)
+
+    local replacement = drop(282, clock, {terminalVote}, terminalVote)
+    local fullLink = replacement.itemHyperlink
+    replacement.itemHyperlink = secret
+    setDrops(replacement)
+    emitDrop(engine, 282)
+
+    previous.winner = terminalVote
+    setDrops(previous)
+    engine:HandleEvent(event, 7, 282)
+    assert(#row == 1 and not row[1].done, "a stale explicit event cannot replace pending newer generation evidence")
+
+    replacement.itemHyperlink = fullLink
+    setDrops(replacement)
+    advance(0.5)
+    assert(#row == 2 and row[1].closed and row[2].winnerValue == 87,
+        "a stale explicit event must leave the newer retry pending")
+end
+
+setDrops()
+engine = new()
+engine:Start()
+local uncertain = drop(283, clock)
+uncertain.itemHyperlink = secret
+setDrops(uncertain)
+emitDrop(engine, 283)
+advance(0.25)
+local confirmedNewer = drop(283, clock, {terminalVote}, terminalVote)
+setDrops(confirmedNewer)
+emitDrop(engine, 283)
+advance(0.5)
+assert(#row == 1 and row[1].startTime == confirmedNewer.startTime and row[1].winnerValue == 87,
+    "a newer fully readable explicit event can supersede pending generation evidence")
+
 print("Capture tests passed")

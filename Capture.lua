@@ -815,6 +815,9 @@ function ns.NewCapture(callbacks)
         if not link or not startTime then return end
 
         local drops = bucket(encounterID)
+        local retries = readRetries[drops]
+        local pending = retries and retries[lootListKey]
+        if pending and pending.expectedStart and startTime < pending.expectedStart then return false end
         local slot = drops[lootListKey]
         local originalSlot = slot
         if slot and startTime < slot.startTime then return end
@@ -839,7 +842,6 @@ function ns.NewCapture(callbacks)
         end
         if slot.ignored then return true end
         local rollInfos = clean(raw.rollInfos, "table")
-        local retries = readRetries[drops]
         if retries then
             if rollInfos or (slot ~= originalSlot and retries[lootListKey] ~= retry) then
                 retries[lootListKey] = nil
@@ -1039,37 +1041,44 @@ function ns.NewCapture(callbacks)
         local drop = clean(read(api.GetSortedInfoForDrop, encounterID, lootListKey), "table")
         if not drop or id(drop.lootListKey) ~= lootListKey then return end
         local startTime, identity = readDropMetadata(drop)
-        if startTime and identity then return drop, startTime, identity end
+        return drop, startTime, identity
     end
 
     local function staleDrop(slot, startTime, identity)
         return slot and (startTime < slot.startTime or (startTime == slot.startTime and identity ~= slot.identity))
     end
 
-    local function retryDropUpdate(encounterID, lootListKey, slot, deadline)
-        if slot and slot.ignored then return end
+    local function retryDropUpdate(encounterID, lootListKey, slot, deadline, reportedStart)
+        local expectedStart = reportedStart and (not slot or reportedStart > slot.startTime) and reportedStart
+        if slot and slot.ignored and not expectedStart then return end
         local drops = bucket(encounterID)
-        -- An unreadable first event can only authorize a drop that already existed.
-        local startLimit = slot and slot.startTime or clean(read(api.GetLootHistoryTime), "number")
+        -- A partial row with a readable start identifies one generation. With
+        -- no row, an unreadable first event only authorizes a drop that existed.
+        local startLimit = expectedStart or (slot and slot.startTime) or clean(read(api.GetLootHistoryTime), "number")
         if not startLimit then return end
         local retries = readRetries[drops]
         local pending = retries and retries[lootListKey]
         if pending then
             -- Fresh events may authorize a later unseen start without extending the retry.
-            if not slot and not deadline then pending.startLimit = math.max(pending.startLimit, startLimit) end
+            if expectedStart and (not pending.expectedStart or expectedStart > pending.expectedStart) then
+                pending.expectedStart, pending.startLimit = expectedStart, expectedStart
+            elseif not slot and not deadline and not pending.expectedStart then
+                pending.startLimit = math.max(pending.startLimit, startLimit)
+            end
             return
         end
         retryRead(encounterID, drops, lootListKey, function(retry)
             if drops[lootListKey] ~= slot then return true end
             local drop, startTime, identity = readUpdatedDrop(encounterID, lootListKey)
-            if not drop or staleDrop(slot, startTime, identity) then return false end
+            if not drop or not startTime or not identity or staleDrop(slot, startTime, identity)
+                or (retry.expectedStart and startTime < retry.expectedStart) then return false end
             if startTime <= retry.startLimit then
                 local complete = snapshotDrop(encounterID, lootListKey, drop, getSourceName(encounterID), false, nil, retry)
                 slot = drops[lootListKey]
                 return complete
             end
             return true
-        end, deadline, {startLimit = startLimit})
+        end, deadline, {startLimit = startLimit, expectedStart = expectedStart})
     end
 
     local function scanEncounter(encounterID, baseline, startLimit, confirmed, deadline)
@@ -1086,17 +1095,18 @@ function ns.NewCapture(callbacks)
             local confirmedStart = lootListKey and confirmed and confirmed[lootListKey]
             if not lootListKey or (confirmedStart and not startTime) then
                 complete = false
-            elseif not confirmedStart or startTime > confirmedStart then
+            elseif (not confirmedStart or startTime > confirmedStart)
+                and (not startLimit or not startTime or startTime <= startLimit) then
                 local slot = drops[lootListKey]
                 if not startTime or not identity or staleDrop(slot, startTime, identity) then
                     if not baseline then
-                        if not startLimit or slot then
-                            retryDropUpdate(encounterID, lootListKey, slot, deadline)
+                        if not startLimit or slot or startTime then
+                            retryDropUpdate(encounterID, lootListKey, slot, deadline, not identity and startTime)
                         else
                             complete = false
                         end
                     end
-                elseif not startLimit or startTime <= startLimit then
+                else
                     local readable = snapshotDrop(encounterID, lootListKey, drop, sourceName, baseline, rows)
                     if readable then
                         if confirmed then confirmed[lootListKey] = startTime end
@@ -1213,8 +1223,8 @@ function ns.NewCapture(callbacks)
             if not lootListKey then return end
             local drop, startTime, identity = readUpdatedDrop(encounterID, lootListKey)
             local slot = seen[encounterID] and seen[encounterID][lootListKey]
-            if not drop or staleDrop(slot, startTime, identity) then
-                retryDropUpdate(encounterID, lootListKey, slot)
+            if not drop or not startTime or not identity or staleDrop(slot, startTime, identity) then
+                retryDropUpdate(encounterID, lootListKey, slot, nil, not identity and startTime)
                 return
             end
             if not snapshotDrop(encounterID, lootListKey, drop, getSourceName(encounterID), false) then

@@ -640,4 +640,24 @@ for _, cancelEvent in ipairs({"CANCEL_LOOT_ROLL", "CANCEL_ALL_LOOT_ROLLS"}) do
     end
 end
 
+reset()
+local originalStart = clock
+popup(908, 1, link)
+local originalHistory = drop(33, originalStart + 1.5, link, {need})
+drops[77] = {originalHistory}
+source = newSource()
+assert(expect(source, 908).rolls[1].name == "Mage")
+advance(3)
+local reusedStart = clock
+local reusedFrame = popup(908, 1, link)
+emit("START_LOOT_ROLL", 908, 60000)
+advance()
+local newRoll = expect(source, 908)
+assert(newRoll.anchor == reusedFrame and #newRoll.rolls == 0 and not newRoll.ambiguous,
+    "a new timed START on a reused ID must not inherit the same item's older responses")
+drops[77] = {originalHistory, drop(34, reusedStart, link, {offspec})}
+emit("LOOT_HISTORY_UPDATE_DROP", 77, 34)
+advance()
+assert(expect(source, 908).rolls[1].name == "Paladin", "a reused ID can bind the new, timed roll")
+
 print("Live source timing, attribution, privacy, and lifecycle tests passed")
