@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.5 — 23-Nov-2026 — Loot roll recovery and inspection
+
+- Keep drops and votes separate when WoW reuses a roll ID or delivers the item link late.
+- Skip expired equipment inspections and avoid inspecting the wrong player when names are ambiguous.
+- Retry loading item data for live rolls when the request queue has room.
+- Keep dungeon visits separate when restoring archived history.
+
 ## 1.3.4 — 22-Nov-2026 — Loot history and inspection fixes
 
 - Recover missing drops and updated winners after incomplete loot history responses.
