@@ -2129,6 +2129,45 @@ do
     assert(nextVisibleRow(LootRollsPlusFrame).entry.inspections["Other Mage"].links[1] == memberItem)
 end
 do
+    local notify, inventoryLink = NotifyInspect, GetInventoryItemLink
+    local function tick(count)
+        for _ = 1, count do timerNow = timerNow + 0.5; flushTimers() end
+    end
+    for index, scenario in ipairs({"noData", "timeout", "exhausted"}) do
+        LootRollsPlusCharDB.days = {}
+        C_LootHistory.GetSortedDropsForEncounter = function() return {} end
+        loadAddon(true)
+        local key = 1116 + index
+        wallTime, historyTime = wallTime + 1, historyTime + 1
+        local winner = {playerName = "Other Mage", playerClass = "MAGE", playerGUID = "Player-Mage", state = 0, roll = 98}
+        drops[key] = {lootListKey = key, itemHyperlink = cloth, startTime = historyTime, rollInfos = {winner}, winner = winner}
+        local requests = 0
+        function NotifyInspect(unit)
+            assert(unit == "party1")
+            requests = requests + 1
+        end
+        fire("LOOT_HISTORY_UPDATE_DROP", 20, key)
+        tick(1)
+        assert(requests == 1, "a confirmed winner must get its initial inspection")
+        local entry = nextVisibleRow(LootRollsPlusFrame).entry
+        if scenario ~= "timeout" then
+            function GetInventoryItemLink() return nil end
+            fire("INSPECT_READY", "Player-Mage")
+        end
+        tick(12)
+        assert(requests == 2, "a confirmed winner should retry incomplete inspection: " .. scenario)
+        if scenario ~= "exhausted" then GetInventoryItemLink = inventoryLink end
+        fire("INSPECT_READY", "Player-Mage")
+        if scenario == "exhausted" then
+            tick(20)
+            assert(requests == 2 and not entry.inspections, "incomplete gear must not trigger repeated inspection")
+        else
+            assert(entry.inspections["Other Mage"].links[1] == memberItem, "retry must save the recovered gear")
+        end
+        NotifyInspect, GetInventoryItemLink = notify, inventoryLink
+    end
+end
+do
     LootRollsPlusCharDB.days = {}
     C_LootHistory.GetSortedDropsForEncounter = function() return {} end
     function GetLootRollItemLink() return cloth end

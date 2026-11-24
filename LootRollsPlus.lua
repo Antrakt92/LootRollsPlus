@@ -2231,11 +2231,13 @@ do
                     RequestItemData(entry.link)
                     jobs[#jobs + 1] = job
                 elseif hasSlot then
-                    local function RetryWinner()
+                    local function RetryWinner(incomplete)
                         local current = seen[entry] and seen[entry][name]
                         if worldReady and entry.done and entry.winner == name
                             and current and current.winner == job.token
+                            and (not incomplete or not job.retriedIncomplete)
                             and GetTime() < job.expires and #jobs < 40 then
+                            if incomplete then job.retriedIncomplete = true end
                             jobs[#jobs + 1] = job
                             Schedule()
                         end
@@ -2243,7 +2245,9 @@ do
                     local status = inspector:Request(entry.link, name, class, function(result, snapshot, guid)
                         if snapshot and SaveInspection(entry, name, class, job.guid, snapshot, guid, true)
                             and detailEntry == entry then DrawComparison() end
-                        if result == "unavailable" then RetryWinner() end
+                        if result == "unavailable" or result == "timeout" or result == "noData" then
+                            RetryWinner(result ~= "unavailable")
+                        end
                     end, job.guid)
                     if status == "busy" or status == "combat" or status == "inspectOpen" then
                         table.insert(jobs, 1, job)
