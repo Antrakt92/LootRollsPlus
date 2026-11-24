@@ -54,24 +54,24 @@ end
 local STRINGS = {
     enUS = { history = "History", clear = "Clear", rolling = "Rolling...", allPassed = "Everyone passed",
              noRolls = "No rolls recorded", winner = "winner",
-             confirmClear = "Clear all recorded rolls for this character? This cannot be undone.", dateFmt = "%m/%d/%Y" },
+             confirmClear = "Clear all recorded rolls for this character? This cannot be undone." },
     esES = { history = "Historial", clear = "Borrar", rolling = "Tirando...", allPassed = "Todos pasaron",
              noRolls = "Sin tiradas registradas", winner = "ganador",
-             confirmClear = "¿Borrar todo el historial de Loot Rolls Plus?", dateFmt = "%d/%m/%Y" },
+             confirmClear = "¿Borrar todo el historial de Loot Rolls Plus?" },
     deDE = { history = "Verlauf", clear = "Löschen", rolling = "Würfeln...", allPassed = "Alle haben gepasst",
              noRolls = "Keine Würfe aufgezeichnet", winner = "Gewinner",
-             confirmClear = "Gesamten Loot-Rolls-Plus-Verlauf löschen?", dateFmt = "%d.%m.%Y" },
+             confirmClear = "Gesamten Loot-Rolls-Plus-Verlauf löschen?" },
     frFR = { history = "Historique", clear = "Effacer", rolling = "Jets en cours...", allPassed = "Tout le monde a passé",
              noRolls = "Aucun jet enregistré", winner = "gagnant",
-             confirmClear = "Effacer tout l'historique de Loot Rolls Plus ?", dateFmt = "%d/%m/%Y" },
+             confirmClear = "Effacer tout l'historique de Loot Rolls Plus ?" },
     ptBR = { history = "Histórico", clear = "Limpar", rolling = "Rolando...", allPassed = "Todos passaram",
              noRolls = "Nenhuma rolagem registrada", winner = "vencedor",
-             confirmClear = "Apagar todo o histórico do Loot Rolls Plus?", dateFmt = "%d/%m/%Y" },
+             confirmClear = "Apagar todo o histórico do Loot Rolls Plus?" },
 }
 STRINGS.esMX = STRINGS.esES
 STRINGS.ruRU = { history = "История", clear = "Очистить", rolling = "Идёт розыгрыш",
     allPassed = "Все отказались", noRolls = "Голосов пока нет", winner = "победитель",
-    confirmClear = "Удалить все записанные розыгрыши этого персонажа? Отменить удаление нельзя.", dateFmt = "%d.%m.%Y" }
+    confirmClear = "Удалить все записанные розыгрыши этого персонажа? Отменить удаление нельзя." }
 
 local L = STRINGS[GetLocale()] or STRINGS.enUS
 
@@ -117,8 +117,8 @@ local BuildDayList -- definido en la UI
 local function DayKey(t) return date("%Y-%m-%d", t) end
 
 local function DayLabel(key)
-    local y, m, d = key:match("(%d+)-(%d+)-(%d+)")
-    return date(L.dateFmt, time({ year = tonumber(y), month = tonumber(m), day = tonumber(d), hour = 12 }))
+    local year, month, day = key:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)$")
+    return display.FormatDate(tonumber(year), tonumber(month), tonumber(day))
 end
 
 local function RebuildDayKeys()
@@ -1542,8 +1542,11 @@ local function DrawEquipped(snapshot, status, state, historical)
             end
             local at = snapshot.at
             if type(at) == "number" and at > 0 and at < math.huge then
-                local ok, timestamp = pcall(date, L.dateFmt .. " %H:%M", at)
-                if ok and timestamp then equippedStatus = equippedStatus .. " · " .. timestamp end
+                local ok, stamp = pcall(date, "*t", at)
+                if ok and stamp then
+                    local day = display.FormatDate(stamp.year, stamp.month, stamp.day)
+                    equippedStatus = ("%s · %s %02d:%02d"):format(equippedStatus, day, stamp.hour, stamp.min)
+                end
             end
         end
     elseif empty and empty[slot] then

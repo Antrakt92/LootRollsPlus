@@ -14,6 +14,21 @@ function display.Label(english, russian)
     return GetLocale() == "ruRU" and russian or english
 end
 
+local months = {
+    enUS = { "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC" },
+    ruRU = { "ЯНВ", "ФЕВ", "МАР", "АПР", "МАЙ", "ИЮН", "ИЮЛ", "АВГ", "СЕН", "ОКТ", "НОЯ", "ДЕК" },
+    esES = { "ENE", "FEB", "MAR", "ABR", "MAY", "JUN", "JUL", "AGO", "SEP", "OCT", "NOV", "DIC" },
+    deDE = { "JAN", "FEB", "MÄR", "APR", "MAI", "JUN", "JUL", "AUG", "SEP", "OKT", "NOV", "DEZ" },
+    frFR = { "JAN", "FÉV", "MAR", "AVR", "MAI", "JUIN", "JUIL", "AOÛ", "SEP", "OCT", "NOV", "DÉC" },
+    ptBR = { "JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AGO", "SET", "OUT", "NOV", "DEZ" },
+}
+months.esMX = months.esES
+
+function display.FormatDate(year, month, day)
+    local names = months[GetLocale()] or months.enUS
+    return ("%02d-%s-%04d"):format(day, names[month], year)
+end
+
 local label = display.Label
 display.Choices = {
     need = { text = NEED or "Need", color = "ffff5050", order = 1, atlas = "lootroll-icon-need" },

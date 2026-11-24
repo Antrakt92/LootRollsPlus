@@ -24,6 +24,8 @@ function CreateAtlasMarkup(atlas, width, height)
 end
 
 local display = loadDisplay()
+assert(display.FormatDate(2026, 11, 4) == "04-NOV-2026")
+assert(display.FormatDate(2026, 9, 24) == "24-SEP-2026")
 assert(display.ChoiceText("need", nil) == "|cffff5050Need|r")
 assert(display.ChoiceText("need", 96, true) == "<lootroll-icon-need> |cffff5050Need 96|r")
 assert(display.ChoiceText("greed", 79, true) == "<lootroll-icon-greed> |cff50ff50Greed 79|r")
@@ -56,6 +58,9 @@ display.SetClassIcon(icon, unknown, nil, "PALADIN")
 assert(not icon.shown and not unknown.shown)
 
 locale = "ruRU"
+assert(display.FormatDate(2026, 11, 4) == "04-НОЯ-2026")
+assert(display.FormatDate(2026, 10, 24) == "24-ОКТ-2026")
+assert(display.FormatDate(2026, 9, 24) == "24-СЕН-2026")
 NEED, GREED = "Нужда", "Алчность"
 CreateAtlasMarkup = nil
 display = loadDisplay()

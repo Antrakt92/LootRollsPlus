@@ -947,12 +947,12 @@ winnerRow:GetScript("OnClick")(winnerRow)
 assert(leftCard.tooltipLink == shield, "clicking another roll should switch the dropped item")
 assert(not rightCard.tooltipLink, "equipment from the previous winner must not carry over")
 contains(rightCard.value, "Player is unavailable in your group")
-local oldInspection = time() - 3600
+local oldInspection = time({ year = 2026, month = 11, day = 4, hour = 16, min = 35, sec = 0 })
 winnerRow.entry.inspections = {[winnerRow.entry.winner] = {at = oldInspection, class = "MAGE", count = 1, links = {equipped}}}
 fire("PLAYER_ENTERING_WORLD", false, false)
 assert(leftCard.tooltipLink == shield and rightCard.tooltipLink == equipped)
 contains(rightCard.footer, "Last inspected gear")
-contains(rightCard.footer, date("%H:%M", oldInspection))
+contains(rightCard.footer, "04-NOV-2026 16:35")
 
 local jewel = "|cnIQ2:|Hitem:1529::::::::|h[Jade]|h|r"
 local getInfo = C_Item.GetItemInfoInstant
@@ -1129,6 +1129,7 @@ main.mockRight, main.mockTop = 580, 500
 local mainListHeight = main:GetHeight()
 local history, dateScroll, itemScroll = openHistory()
 local shortHeight, shortWidth = history:GetHeight(), itemScroll:GetWidth()
+contains(visibleText(dateScroll.scrollChild), "14-NOV-2026")
 local historyRow = nextVisibleRow(itemScroll.scrollChild)
 assert(history:GetWidth() < 465 and main:GetWidth() == history:GetWidth())
 assert(main.lastPoint[1] == "TOPRIGHT" and main.lastPoint[2] == UIParent
@@ -1198,6 +1199,7 @@ do
     assert(box:IsVisible() and box.focused and dateScroll:IsShown())
     query(" NEEDLECASE  ")
     local rows, count = results()
+    contains(visibleText(itemScroll.scrollChild), "14-NOV-2026")
     assert(rows[current] and count == 60 and not dateScroll:IsShown(), "search must span dates with a bounded first page")
     assert(not prev:IsShown() and nextPage:IsShown() and itemScroll:GetVerticalScroll() == 0)
     click(nextPage)
