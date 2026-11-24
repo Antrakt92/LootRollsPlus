@@ -982,7 +982,7 @@ do
     box:SetPoint("TOPRIGHT", -10, -HISTORY_TOP)
     box:SetHeight(20)
     box:SetAutoFocus(false)
-    box:SetMaxLetters(96)
+    box:SetMaxLetters(512)
     box:Hide()
 
     local revision = 0

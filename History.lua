@@ -383,9 +383,15 @@ local function foldSearchText(text)
     return text
 end
 
+local function searchItemName(link)
+    return link and link:match("|h%[([^|]+)%]|h")
+end
+
 function History.SearchTerms(query)
     query = clean(query, "string")
     if not query then return end
+    query = query:match("^%s*(.-)%s*$")
+    query = searchItemName(itemLink(query)) or query:match("^%[([^%[%]]+)%]$") or query
     local terms = {}
     for term in foldSearchText(query):gmatch("%S+") do
         terms[#terms + 1] = term
@@ -403,7 +409,7 @@ local function searchFields(entry, memo)
     if saved and saved.link == link and saved.winner == winner and saved.visit == visitName and saved.source == source then
         return saved.fields
     end
-    local item = link and link:match("|h%[([^|]+)%]|h")
+    local item = searchItemName(link)
     local fields = foldSearchText(table.concat({
         item or "", playerName(winner) or "", plainText(visitName) or "", plainText(source) or "",
     }, " "))

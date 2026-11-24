@@ -13,7 +13,7 @@ local methods = {
     "SetColorTexture", "SetVerticalScroll", "SetChecked", "SetAlpha", "SetFontObject",
     "SetJustifyV", "SetMaxLines", "SetNormalFontObject", "SetHighlightFontObject",
     "SetResizable", "SetMinResize", "SetNormalTexture", "RegisterForClicks", "SetAutoFocus", "SetHitRectInsets",
-    "SetOrientation", "SetValueStep", "SetObeyStepOnDrag", "EnableMouseWheel", "SetMaxLetters",
+    "SetOrientation", "SetValueStep", "SetObeyStepOnDrag", "EnableMouseWheel",
 }
 for _, name in ipairs(methods) do widget[name] = noop end
 function widget:SetUserPlaced(placed) self.userPlaced = placed end
@@ -40,7 +40,9 @@ function widget:GetUnboundedStringWidthForText(text)
     local plain = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("|A.-|a", "XX")
     return #plain * (self.mockGlyphWidth or 6)
 end
+function widget:SetMaxLetters(limit) self.maxLetters = limit end
 function widget:SetText(value)
+    if self.maxLetters and type(value) == "string" then value = value:sub(1, self.maxLetters) end
     if self.value == value then return end
     self.value = value
     if self.scripts and self.scripts.OnTextChanged then self.scripts.OnTextChanged(self, false) end
@@ -1197,6 +1199,8 @@ do
     itemScroll:SetVerticalScroll(30)
     click(searchButton)
     assert(box:IsVisible() and box.focused and dateScroll:IsShown())
+    query("|cnIQ2:|Hitem:123" .. string.rep(":0", 60) .. "|h[Cloth Robe]|h|r")
+    assert(results()[current], "a long item hyperlink must reach the search parser without truncation")
     query(" NEEDLECASE  ")
     local rows, count = results()
     contains(visibleText(itemScroll.scrollChild), "14-NOV-2026")
