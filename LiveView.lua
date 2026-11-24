@@ -425,7 +425,6 @@ local function newDetails()
     frame.empty = font(frame.body)
     frame.empty:SetPoint("TOPLEFT", PADDING + 2, -1)
     frame.empty:SetPoint("TOPRIGHT", -PADDING, -1)
-    frame.empty:SetText(noMatchingRolls)
 
     local slider = CreateFrame("Slider", nil, frame.body)
     slider:SetOrientation("VERTICAL")
@@ -598,7 +597,9 @@ showDetails = function(card, reset)
         return
     end
     local extra = math.max(0, #players - visibleRows)
-    local offset = reset and 0 or math.min(details.offset, extra)
+    local emptyRoster = #entry.players == 0
+    -- A transient unreadable snapshot must not reset the reading position.
+    local offset = reset and 0 or (emptyRoster and details.offset or math.min(details.offset, extra))
     if details.visibleRows ~= visibleRows then
         local inset = visibleRows == 1 and 2 or 8
         local slider = details.slider
@@ -613,6 +614,9 @@ showDetails = function(card, reset)
     if extra > 0 then
         details.slider:SetMinMaxValues(0, extra)
         details.slider:SetValue(offset)
+    end
+    if #players == 0 then
+        details.empty:SetText(emptyRoster and (entry.hasHistory and noResponses or waitingForData) or noMatchingRolls)
     end
     details.empty:SetShown(#players == 0)
     drawDetailsRows(details)
@@ -792,7 +796,9 @@ local function render(entries, raid, demo, pawnRects, promptRects)
             local presentation = cardPresentation(entry, raid)
             if fitCard(card, anchor, entry, raid, presentation.height, pawnRects) then
                 local canExpand = drawCard(card, entry, presentation)
-                if canExpand and isExpanded(entry) then expanded = card end
+                local waitingForVotes = raid and #entry.players == 0 and not entry.ambiguous
+                    and not presentation.winner and not entry.allPassed
+                if (canExpand or waitingForVotes) and isExpanded(entry) then expanded = card end
             else
                 hideCard(card)
             end

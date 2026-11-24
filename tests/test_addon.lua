@@ -1889,6 +1889,17 @@ do
         auditView:Render({raidEntry}, true, false)
         assert(roster.rows[roster.visibleRows].livePlayer == raidEntry.players[40],
             "refresh the same roll without losing the active filter or reading position")
+        local stablePlayers, stableCounts, stableOffset = raidEntry.players, raidEntry.counts, roster.offset
+        raidEntry.players, raidEntry.counts = {}, {}
+        auditView:Render({raidEntry}, true, false)
+        assert(roster:IsVisible() and roster.empty:IsVisible() and not roster.rows[1]:IsVisible(),
+            "an unreadable refresh must keep the roster open without showing stale votes")
+        contains(roster.empty.value, "Waiting for roll data")
+        assert(roster.filter == "greed" and roster.offset == stableOffset)
+        raidEntry.players, raidEntry.counts = stablePlayers, stableCounts
+        auditView:Render({raidEntry}, true, false)
+        assert(roster.rows[roster.visibleRows].livePlayer == raidEntry.players[40],
+            "retry must restore the filtered roster at its previous position")
         click(pass)
         assert(roster.rows[1].livePlayer == raidEntry.players[5] and roster.offset == 0)
         raidEntry.players[5].choice = "greed"
