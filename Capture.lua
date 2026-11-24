@@ -417,11 +417,10 @@ function ns.NewCapture(callbacks)
         and canSchedule and #chatRules > 0
 
     local function removeChatSlot(slot)
-        if chatByID[slot.id] ~= slot then return end
-        chatByID[slot.id] = nil
+        if chatByID[slot.id] == slot then chatByID[slot.id] = nil end
         local group = chatByLink[slot.identity]
         if group then
-            group[slot.id] = nil
+            group[slot] = nil
             if not next(group) then chatByLink[slot.identity] = nil end
         end
     end
@@ -522,7 +521,7 @@ function ns.NewCapture(callbacks)
 
     local function coverRoll(rollID, nativeSlot, lifetime)
         nativeSlot.covered = true
-        local token = {}
+        local token = { identity = nativeSlot.identity }
         coveredRolls[rollID] = token
         _G.C_Timer.After(lifetime, function()
             if coveredRolls[rollID] == token then coveredRolls[rollID] = nil end
@@ -577,7 +576,11 @@ function ns.NewCapture(callbacks)
             end
         elseif candidate and not nativeSlot.covered
             and uniqueNativeStart(nativeSlot, candidate.historyStart, candidate.entry.t, encounterDrops) then
-            coverRoll(candidate.id, nativeSlot, math.max(2, candidate.expires - time()))
+            if chatByID[candidate.id] == candidate then
+                coverRoll(candidate.id, nativeSlot, math.max(2, candidate.expires - time()))
+            else
+                nativeSlot.covered = true
+            end
             suppressChatSlot(candidate, nativeSlot.entry)
         end
         if nativeActive[identity] then
@@ -594,9 +597,14 @@ function ns.NewCapture(callbacks)
         if not fallbackAvailable then return end
         local rollID = id(rollID)
         local duration = clean(rollTime, "number")
-        if not rollID or not duration or duration <= 0 or chatByID[rollID] or coveredRolls[rollID] then return end
+        if not rollID or not duration or duration <= 0 then return end
+        local previous = chatByID[rollID]
+        if previous and not (previous.entry.done or previous.entry.closed) then return end
         local link, identity = itemLink(read(_G.GetLootRollItemLink, rollID))
-        if not link then return end
+        local covered = coveredRolls[rollID]
+        if not link or (previous and previous.identity == identity) or (covered and covered.identity == identity) then return end
+        -- Keep the old item eligible for late chat without owning the recycled ID.
+        chatByID[rollID], coveredRolls[rollID] = nil, nil
         local observedAt = time()
         local active = nativeActive[identity]
         local historyStart = clean(read(api.GetLootHistoryTime), "number")
@@ -633,11 +641,10 @@ function ns.NewCapture(callbacks)
                 markAmbiguous(other)
             end
         end
-        group[rollID], chatByID[rollID] = slot, slot
+        group[slot], chatByID[rollID] = slot, slot
         callbacks.onDrop(entry, true)
         _G.C_Timer.After(lifetime, function()
-            if chatByID[rollID] ~= slot then return end
-            closeChatSlot(slot)
+            if chatByID[rollID] == slot then closeChatSlot(slot) end
             removeChatSlot(slot)
         end)
     end
@@ -787,7 +794,7 @@ function ns.NewCapture(callbacks)
             target.completionMessage = message
             target.expires = math.min(target.expires, observedAt + LATE_CHAT_GRACE)
             _G.C_Timer.After(LATE_CHAT_GRACE + 1, function()
-                if chatByID[target.id] == target then removeChatSlot(target) end
+                removeChatSlot(target)
             end)
         elseif parsed.value then
             target.scoreMessages = target.scoreMessages or {}
