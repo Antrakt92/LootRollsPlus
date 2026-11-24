@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.0 — 24-Nov-2026 — History search and raid filters
+
+- Search all saved dates by item, winner, dungeon, or drop source. Paste an item link or combine the search with **My wins**.
+- Click **Need**, **Greed**, or **Pass** in the expanded raid list to focus on that choice. The selection stays in place while roll data is temporarily unavailable.
+- Use the day–month–year format throughout History and on saved equipment tooltips, for example `24-NOV-2026`.
+- Keep new drops separate when WoW reuses a roll ID, and keep canceled rolls from reappearing after the live panel is enabled.
+- Retry incomplete winner inspections and free item-loading slots as soon as requests finish.
+
 ## 1.3.5 — 23-Nov-2026 — Loot roll recovery and inspection
 
 - Keep drops and votes separate when WoW reuses a roll ID or delivers the item link late.
