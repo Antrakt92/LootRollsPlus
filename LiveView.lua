@@ -11,6 +11,7 @@ local isSecret = issecretvalue or function() return false end
 local cards, demoAnchors = {}, {}
 local layoutObstacles = {}
 local details
+local showDetails
 local geometryWatch = CreateFrame("Frame", "LootRollsPlusLiveGeometry", UIParent)
 geometryWatch:Hide()
 
@@ -28,6 +29,7 @@ local overlapping = label("Overlapping rolls", "Совпавшие розыгр�
 local winnerLabel = label("Winner", "Победитель")
 local playersLabel = label("Players", "Игроки")
 local demoLabel = label("Demo", "Демо")
+local noMatchingRolls = label("No matching rolls", "Нет подходящих роллов")
 local noPlayers = {}
 
 local function buildCounts(entry, first, last, compact)
@@ -342,12 +344,14 @@ local function hideDetails()
     if details then
         details:Hide()
         details.card, details.entry, details.players = nil, nil, nil
+        details.filter = nil
     end
 end
 
 local function isExpanded(entry)
     local current = details and details:IsShown() and details.entry
-    return current and current.id == entry.id and current.link == entry.link and current.demo == entry.demo
+    return current and current.id == entry.id and current.generation == entry.generation
+        and current.link == entry.link and current.demo == entry.demo
 end
 
 local function hideCard(card)
@@ -380,8 +384,35 @@ local function newDetails()
     frame.title = font(frame)
     frame.title:SetPoint("TOPLEFT", PADDING + 2, -PADDING - 1)
     frame.title:SetPoint("TOPRIGHT", -PADDING, -PADDING - 1)
-    frame.counts = {}
+    frame.filters = {}
+    local filterNames = { "Need", "Greed", "Pass" }
     for i = 1, 3 do
+        local button = CreateFrame("Button", "LootRollsPlusRaidFilter" .. filterNames[i], frame)
+        button.choice = countOrder[i]
+        button:SetHeight(ROW_HEIGHT)
+        button:RegisterForClicks("LeftButtonUp")
+        button:SetHighlightTexture("Interface\\Buttons\\WHITE8X8")
+        button:GetHighlightTexture():SetVertexColor(1, 1, 1, 0.12)
+        button.background = button:CreateTexture(nil, "BACKGROUND")
+        button.background:SetAllPoints()
+        button.text = font(button, "CENTER")
+        button.text:SetPoint("LEFT", 2, 0)
+        button.text:SetPoint("RIGHT", -2, 0)
+        button:SetScript("OnClick", function(self)
+            if not frame.card then return end
+            if frame.filter == self.choice then
+                frame.filter = nil
+            else
+                frame.filter = self.choice
+            end
+            frame.offset = 0
+            showDetails(frame.card, false)
+            if view.OnPlacementChanged then view.OnPlacementChanged() end
+        end)
+        frame.filters[i] = button
+    end
+    frame.counts = {}
+    for i = 2, 3 do
         local line = font(frame)
         line:SetPoint("TOPLEFT", PADDING + 2, -DETAIL_HEADER - (i - 1) * ROW_HEIGHT)
         line:SetPoint("TOPRIGHT", -PADDING, -DETAIL_HEADER - (i - 1) * ROW_HEIGHT)
@@ -391,6 +422,10 @@ local function newDetails()
     frame.body:SetPoint("BOTTOMLEFT")
     frame.body:SetPoint("BOTTOMRIGHT")
     frame.rows = newRows(frame.body, MAX_ROWS, 0)
+    frame.empty = font(frame.body)
+    frame.empty:SetPoint("TOPLEFT", PADDING + 2, -1)
+    frame.empty:SetPoint("TOPRIGHT", -PADDING, -1)
+    frame.empty:SetText(noMatchingRolls)
 
     local slider = CreateFrame("Slider", nil, frame.body)
     slider:SetOrientation("VERTICAL")
@@ -499,16 +534,44 @@ local function positionDetails(frame, card)
     return true
 end
 
-local function showDetails(card, reset)
+showDetails = function(card, reset)
     details = details or newDetails()
     local entry = card.entry
-    details.card, details.entry, details.players = card, entry, entry.players
+    details.card, details.entry = card, entry
+    if reset then details.filter = nil end
+    local players = entry.players
+    if details.filter then
+        players = {}
+        for _, player in ipairs(entry.players) do
+            if player.choice == details.filter then players[#players + 1] = player end
+        end
+    end
+    details.players = players
     details.title:SetText(entry.link or display.Escape(entry.name or ""))
     details:SetWidth(card:GetWidth())
     local available = details:GetWidth() - 2 * PADDING - 2
-    local counts = buildCounts(entry, 1, 3)
-    if not fits(details.counts[1], counts, available) then
-        counts = buildCounts(entry, 1, 3, true)
+    local filterGap = 2
+    local filterWidth = math.floor((available - 2 * filterGap) / 3)
+    for i, button in ipairs(details.filters) do
+        local choice = button.choice
+        button:SetPoint("TOPLEFT", PADDING + 2 + (i - 1) * (filterWidth + filterGap), -DETAIL_HEADER)
+        button:SetWidth(filterWidth)
+        local count = entry.counts[choice] or 0
+        local color = display.Choices[choice].color
+        local text = display.ChoiceText(choice, count)
+        local icon = display.ChoiceIcon(choice)
+        if not fits(button.text, text, filterWidth - 4) then
+            text = tint(shortChoices[choice] .. " " .. count, color)
+            if icon ~= "" and not fits(button.text, text, filterWidth - 4) then
+                text = icon .. tint(tostring(count), color)
+            end
+        end
+        button.text:SetText(text)
+        if details.filter == choice then
+            button.background:SetColorTexture(0.23, 0.37, 0.57, 0.88)
+        else
+            button.background:SetColorTexture(1, 1, 1, 0.07)
+        end
     end
     local extras, rest = buildCounts(entry, 4, #countOrder), ""
     if not fits(details.counts[2], extras, available) then
@@ -516,14 +579,15 @@ local function showDetails(card, reset)
         if extras == "" then extras, rest = rest, "" end
     end
     local header = DETAIL_HEADER + ROW_HEIGHT
-    for i, text in ipairs({ counts, extras, rest }) do
+    for i = 2, 3 do
+        local text = i == 2 and extras or rest
         details.counts[i]:SetText(text)
         details.counts[i]:SetShown(text ~= "")
-        if i > 1 and text ~= "" then header = header + ROW_HEIGHT end
+        if text ~= "" then header = header + ROW_HEIGHT end
     end
     details.body:SetPoint("TOPLEFT", 0, -header)
     details.body:SetPoint("TOPRIGHT", 0, -header)
-    local visibleRows = math.min(#entry.players, MAX_ROWS)
+    local visibleRows = math.max(1, math.min(#players, MAX_ROWS))
     while visibleRows > 0 do
         details:SetHeight(header + visibleRows * ROW_HEIGHT + PADDING)
         if positionDetails(details, card) then break end
@@ -533,7 +597,7 @@ local function showDetails(card, reset)
         hideDetails()
         return
     end
-    local extra = #entry.players - visibleRows
+    local extra = math.max(0, #players - visibleRows)
     local offset = reset and 0 or math.min(details.offset, extra)
     if details.visibleRows ~= visibleRows then
         local inset = visibleRows == 1 and 2 or 8
@@ -550,6 +614,7 @@ local function showDetails(card, reset)
         details.slider:SetMinMaxValues(0, extra)
         details.slider:SetValue(offset)
     end
+    details.empty:SetShown(#players == 0)
     drawDetailsRows(details)
     details:Show()
 end

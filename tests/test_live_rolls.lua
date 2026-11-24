@@ -6,7 +6,7 @@ function GetLocale() return "enUS" end
 assert(loadfile(root .. "/LiveRolls.lua"))("LootRollsPlus", ns)
 
 local raw = {
-    id = 901, anchor = {}, rolls = {
+    id = 901, anchor = {}, generation = {}, rolls = {
         {name = "Greed", state = "greed", roll = 100},
         {name = "Offspec", state = "offspec", roll = 99},
         {name = "First", state = "need", roll = 41, class = "MAGE", isSelf = true},
@@ -17,7 +17,7 @@ local raw = {
     },
 }
 local view = ns.BuildLiveRolls({raw})[1]
-assert(view.id == raw.id and view.anchor == raw.anchor and not view.winner)
+assert(view.id == raw.id and view.anchor == raw.anchor and view.generation == raw.generation and not view.winner)
 assert(view.counts.need == 3 and view.counts.offspec == 1 and view.counts.waiting == 1)
 assert(view.counts.greed == 1 and view.counts.pass == 1)
 assert(view.players[1].name == "First" and view.players[2].name == "Second")

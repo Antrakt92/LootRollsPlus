@@ -1739,7 +1739,8 @@ end
 
 local function LiveComparisonCard(comparison)
     local card = ns.LiveView:FindCard(comparison.id, comparison.link)
-    if not card or not card.entry.canInspect or card.entry.demo ~= comparison.demo then return end
+    if not card or not card.entry.canInspect or card.entry.demo ~= comparison.demo
+        or card.entry.generation ~= comparison.generation then return end
     local entry = card.entry
     if entry.allPassed then return end
     local matches = 0
@@ -1786,10 +1787,12 @@ ns.LiveView.OnPlayerClick = function(card, entry, player, owner)
     local previous = liveComparison
     details:Hide()
     if previous and previous.id == entry.id and previous.link == entry.link
+        and previous.demo == entry.demo and previous.generation == entry.generation
         and previous.name == player.name and previous.guid == player.guid and previous.class == player.class then return end
 
     local panel = owner.livePanel
-    local comparison = { id = entry.id, link = entry.link, name = player.name, guid = player.guid, class = player.class, demo = entry.demo,
+    local comparison = { id = entry.id, link = entry.link, generation = entry.generation, demo = entry.demo,
+        name = player.name, guid = player.guid, class = player.class,
         card = card, roster = panel ~= card and panel or nil }
     liveComparison = comparison
     detailAnchor = ns.LiveView:EquippedAnchor(card, comparison.roster)

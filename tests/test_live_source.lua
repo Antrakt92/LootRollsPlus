@@ -660,4 +660,26 @@ emit("LOOT_HISTORY_UPDATE_DROP", 77, 34)
 advance()
 assert(expect(source, 908).rolls[1].name == "Paladin", "a reused ID can bind the new, timed roll")
 
+reset()
+local sharedFrame = popup(909, 1, link)
+drops[77] = {drop(35, clock, link, {need})}
+source, notices = newSource()
+local firstGeneration = expect(source, 909).generation
+assert(firstGeneration and expect(source, 909).rolls[1].name == "Mage")
+local secondVote = player("Rogue", "ROGUE", 3, 12)
+drops[77][1].rollInfos = {need, secondVote}
+emit("LOOT_HISTORY_UPDATE_DROP", 77, 35)
+advance()
+assert(expect(source, 909).generation == firstGeneration, "vote updates preserve the generation")
+advance(3)
+local noticesBeforeReuse = notices.count
+rolls[909].finish = clock + 60
+drops[77][2] = drop(36, clock, link, {need, secondVote})
+emit("START_LOOT_ROLL", 909, 60000)
+advance()
+local reused = expect(source, 909)
+assert(reused.anchor == sharedFrame and #reused.rolls == 2 and reused.generation ~= firstGeneration,
+    "a new occurrence of the same item and ID must change generation even with identical votes")
+assert(notices.count == noticesBeforeReuse + 1, "generation-only updates must reach rendering")
+
 print("Live source timing, attribution, privacy, and lifecycle tests passed")

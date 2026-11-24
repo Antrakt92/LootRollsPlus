@@ -1761,6 +1761,14 @@ auditCard.toggle:GetScript("OnClick")()
 assert(LootRollsPlusLiveDetails:IsVisible())
 auditView:Render({auditEntry(cloth)}, true, false)
 assert(LootRollsPlusLiveDetails:IsVisible(), "same drop keeps open disclosure")
+do
+    local replacement = auditEntry(cloth)
+    replacement.generation = {}
+    auditView:Render({replacement}, true, false)
+    assert(not LootRollsPlusLiveDetails:IsVisible(), "a new generation with the same item and ID closes the old roster")
+    auditCard.toggle:GetScript("OnClick")()
+    assert(LootRollsPlusLiveDetails:IsVisible())
+end
 auditView:Render({auditEntry(shield)}, true, false)
 assert(not LootRollsPlusLiveDetails:IsVisible(), "reused ID must close previous drop disclosure")
 auditPlayer.name, auditPlayer.class, auditPlayer.guid = "Self", "PALADIN", false
@@ -1768,6 +1776,20 @@ auditView:Render({auditEntry(cloth)}, false, false)
 auditCard.rows[1]:GetScript("OnClick")(auditCard.rows[1])
 assert(not liveGear.tooltipLink, "a restricted GUID must not fall back to inspecting by name")
 contains(liveGear.value, "Cannot inspect")
+assert(liveGear:IsVisible())
+do
+    local sameRoll = auditEntry(cloth)
+    auditView:Render({sameRoll}, false, false)
+    auditView.OnPlacementChanged()
+    assert(liveGear:IsVisible(), "refreshing the same generation must keep the live comparison")
+    local replacement = auditEntry(cloth)
+    replacement.generation = {}
+    auditView:Render({replacement}, false, false)
+    auditView.OnPlacementChanged()
+    assert(not liveGear:IsVisible(), "a reused roll ID with a new generation must close the live comparison")
+    auditCard.rows[1]:GetScript("OnClick")(auditCard.rows[1])
+    assert(liveGear:IsVisible(), "the same player can be inspected again on the replacement roll")
+end
 mouseDown("LeftButton", UIParent)
 UIParent:SetSize(535, 800)
 auditAnchor.mockLeft, auditAnchor.mockRight = 122, 411
@@ -1837,6 +1859,48 @@ do
     local roster = LootRollsPlusLiveDetails
     assert(roster:IsVisible() and roster.lastPoint[1] == "BOTTOMRIGHT" and roster.lastPoint[2] == first,
         "the expanded raid list must avoid the neighboring native loot prompt")
+
+    do
+        local need, greed, pass = LootRollsPlusRaidFilterNeed, LootRollsPlusRaidFilterGreed, LootRollsPlusRaidFilterPass
+        local function click(button)
+            mouseDown("LeftButton", button)
+            button:GetScript("OnClick")(button)
+        end
+        raidEntry.players[2].choice, raidEntry.players[5].choice = "need", "pass"
+        raidEntry.counts = {need = 1, greed = 38, pass = 1}
+        auditView:Render({raidEntry}, true, false)
+        contains(need.text.value, "Need 1")
+        contains(greed.text.value, "Greed 38")
+        contains(pass.text.value, "Pass 1")
+        click(need)
+        assert(roster:IsVisible() and roster.rows[1].livePlayer == raidEntry.players[2])
+        assert(not roster.rows[2]:IsVisible() and not roster.slider:IsVisible())
+        assert(need.background.color[4] > greed.background.color[4], "show the active filter")
+        click(greed)
+        assert(roster.slider:IsVisible() and roster.slider.maxValue == 38 - roster.visibleRows)
+        roster.slider:SetValue(roster.slider.maxValue)
+        assert(roster.rows[roster.visibleRows].livePlayer == raidEntry.players[40])
+        auditView:Render({raidEntry}, true, false)
+        assert(roster.rows[roster.visibleRows].livePlayer == raidEntry.players[40],
+            "refresh the same roll without losing the active filter or reading position")
+        click(pass)
+        assert(roster.rows[1].livePlayer == raidEntry.players[5] and roster.offset == 0)
+        raidEntry.players[5].choice = "greed"
+        raidEntry.counts = {need = 1, greed = 39}
+        auditView:Render({raidEntry}, true, false)
+        assert(roster:IsVisible() and roster.empty:IsVisible() and not roster.rows[1]:IsVisible(),
+            "keep an active filter open while it has no matching players")
+        click(pass)
+        assert(not roster.empty:IsVisible() and roster.rows[2].livePlayer == raidEntry.players[2])
+        click(need)
+        click(first.toggle)
+        assert(not roster:IsVisible())
+        click(first.toggle)
+        assert(roster:IsVisible() and roster.rows[1].livePlayer == raidEntry.players[1],
+            "reopening a roster shows all players")
+        raidEntry.players[2].choice = "greed"
+        raidEntry.counts = {greed = 40}
+    end
 
     UIParent:SetSize(1000, 280)
     firstPrompt.mockBottom, firstPrompt.mockTop = 107, 197

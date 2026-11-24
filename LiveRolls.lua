@@ -82,7 +82,7 @@ function ns.BuildLiveRolls(rolls, warning, hasSlot)
             end
         end
         entries[i] = {
-            id = raw.id, anchor = raw.anchor, link = raw.link, name = raw.name, icon = raw.icon,
+            id = raw.id, generation = raw.generation, anchor = raw.anchor, link = raw.link, name = raw.name, icon = raw.icon,
             players = players, counts = counts, leaders = leaders, more = needs - #leaders,
             winner = winner, allPassed = raw.allPassed, ambiguous = raw.ambiguous,
             hasHistory = raw.hasHistory, demo = raw.demo, canInspect = canInspect,

@@ -110,7 +110,7 @@ local function sameSnapshot(a, b)
     if #a ~= #b then return false end
     for i, old in ipairs(a) do
         local new = b[i]
-        if old.id ~= new.id or old.anchor ~= new.anchor or old.link ~= new.link
+        if old.id ~= new.id or old.generation ~= new.generation or old.anchor ~= new.anchor or old.link ~= new.link
             or old.ambiguous ~= new.ambiguous or old.allPassed ~= new.allPassed
             or old.hasHistory ~= new.hasHistory or not samePlayer(old.winner, new.winner)
             or #old.rolls ~= #new.rolls then return false end
@@ -459,8 +459,10 @@ function Source:Refresh(scanHistory)
         local row = observation.rendered
         if not row or row.anchor ~= item.anchor or row.link ~= observation.link
             or row.ambiguous ~= ambiguous or observation.renderedFrom ~= candidate then
+            -- Keep transient UI tied to this occurrence even when the native ID and item are reused.
+            observation.generation = observation.generation or {}
             row = {
-                id = item.id, anchor = item.anchor, link = observation.link,
+                id = item.id, generation = observation.generation, anchor = item.anchor, link = observation.link,
                 rolls = {}, allPassed = false, ambiguous = ambiguous,
             }
             if candidate then
