@@ -5,6 +5,7 @@ ns.LiveSource = Source
 
 local REFRESH_INTERVAL = 0.12
 local START_TOLERANCE = 2
+local LINK_RECHECK_WINDOW = 2
 local HISTORY_RETRY_INTERVAL = 0.5
 local HISTORY_RETRY_WINDOW = 2
 local LIFECYCLE_EVENTS = {
@@ -321,6 +322,8 @@ function Source:Refresh(scanHistory)
     local api = clean(_G.C_LootHistory, "table") or {}
     local historyTime = number(read(api.GetLootHistoryTime))
     local now = number(read(_G.GetTime)) or 0
+    local recheckLinks = self.recheckLinks
+    self.recheckLinks = nil
     local slots, ids, interests, owners, reportedCancelled = {}, {}, {}, {}, {}
     local missingIdentity = false
 
@@ -337,10 +340,25 @@ function Source:Refresh(scanHistory)
         ids[id] = true
         local observation = self.observations[id] or {}
         self.observations[id] = observation
-        if not observation.identity then
+        local recheckUntil = observation.recheckLinkUntil
+        if not observation.identity or (recheckUntil and (now <= recheckUntil or recheckLinks)) then
             local link = clean(read(_G.GetLootRollItemLink, id), "string")
             local identity = itemLink(link)
-            if identity then observation.link, observation.identity = link, identity end
+            if identity then
+                if observation.identity and identity ~= observation.identity then
+                    observation = { seenAt = observation.seenAt }
+                    self.observations[id] = observation
+                end
+                -- A readable old link can be the first response after a masked
+                -- replacement START. Restore it provisionally and keep checking.
+                observation.link, observation.identity, observation.linkUnconfirmed = link, identity, nil
+            end
+        end
+        if observation.linkUnconfirmed then
+            -- A masked START may refer to a replacement popup. Keep an old binding
+            -- for a duplicate START, but only show it once the link is readable again.
+            missingIdentity = true
+            return
         end
         updateObservationStart(observation, id, historyTime, duration)
         local ambiguous = self.disabledAmbiguity and self.disabledAmbiguity[id]
@@ -500,6 +518,7 @@ end
 function Source:Reset()
     self.observations, self.cancelled, self.history, self.updates = {}, {}, {}, {}
     self.forceRefresh, self.warmupUntil, self.warmupAt, self.historyRetries, self.retired = false, nil, nil, {}, {}
+    self.recheckLinks = nil
 end
 
 function Source:Wake(scanHistory)
@@ -525,14 +544,18 @@ function Source:OnEvent(event, first, second)
     if not self.enabled then
         local id = key(first)
         local known = self.disabledKnownRolls
-        -- While hidden, track lifecycle only for IDs already observed.
+        -- Keep lifecycle events only. Gathering item and history data stays disabled.
         if event == "START_LOOT_ROLL" and id then
             if self.cancelled[id] and self.disabledAmbiguity then self.disabledAmbiguity[id] = nil end
             self.cancelled[id], self.retired[id] = nil, nil
+            self.disabledKnownRolls = known or {}
+            self.disabledKnownRolls[id] = true
         elseif event == "CANCEL_LOOT_ROLL" and known and id and known[id] then
             self.cancelled[id] = true
+            known[id] = nil
         elseif event == "CANCEL_ALL_LOOT_ROLLS" then
             for observedID in pairs(known or {}) do self.cancelled[observedID] = true end
+            self.disabledKnownRolls = nil
         end
         return
     end
@@ -560,7 +583,12 @@ function Source:OnEvent(event, first, second)
             end
             updateObservationStart(observation, id, historyTime, second, true)
             observation.seenAt = number(read(_G.GetTime))
-            if identity then observation.identity, observation.link = identity, link end
+            if identity then
+                observation.identity, observation.link, observation.linkUnconfirmed = identity, link, nil
+            elseif observation.identity then
+                observation.recheckLinkUntil = (observation.seenAt or 0) + LINK_RECHECK_WINDOW
+                observation.linkUnconfirmed = true
+            end
             self.retired[id] = nil
             if identity then
                 local active
@@ -625,6 +653,7 @@ function Source:OnEvent(event, first, second)
     elseif event == "LOOT_HISTORY_UPDATE_DROP" or event == "LOOT_HISTORY_UPDATE_ENCOUNTER" then
         local encounter = key(first)
         if encounter then
+            self.recheckLinks = true
             if event == "LOOT_HISTORY_UPDATE_ENCOUNTER" then
                 queueHistoryUpdate(self.updates, encounter)
             else
