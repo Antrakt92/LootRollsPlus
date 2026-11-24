@@ -364,6 +364,81 @@ function History.IsPlayerWin(entry, fullName, shortName, playerClass)
     return true
 end
 
+local searchLower = {}
+do
+    local letters = "[\194-\223][\128-\191]"
+    local lower = ("àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿœšž" ..
+        "абвгдеёжзийклмнопрстуфхцчшщъыьэюя"):gmatch(letters)
+    for upper in ("ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞŸŒŠŽ" ..
+        "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ"):gmatch(letters) do
+        searchLower[upper] = lower()
+    end
+end
+
+local function foldSearchText(text)
+    text = text:lower()
+    if text:find("[\194-\223]") then
+        return (text:gsub("[\194-\223][\128-\191]", searchLower))
+    end
+    return text
+end
+
+function History.SearchTerms(query)
+    query = clean(query, "string")
+    if not query then return end
+    local terms = {}
+    for term in foldSearchText(query):gmatch("%S+") do
+        terms[#terms + 1] = term
+    end
+    return #terms > 0 and terms or nil
+end
+
+local function searchFields(entry, memo)
+    local link = clean(entry.link, "string")
+    local visit = clean(entry.visit, "table")
+    local visitName = clean(visit and visit.name, "string")
+    local winner = clean(entry.winner, "string")
+    local source = clean(entry.sourceName, "string")
+    local saved = memo and memo[entry]
+    if saved and saved.link == link and saved.winner == winner and saved.visit == visitName and saved.source == source then
+        return saved.fields
+    end
+    local item = link and link:match("|h%[([^|]+)%]|h")
+    local fields = foldSearchText(table.concat({
+        item or "", playerName(winner) or "", plainText(visitName) or "", plainText(source) or "",
+    }, " "))
+    if memo then
+        memo[entry] = { link = link, winner = winner, visit = visitName, source = source, fields = fields }
+    end
+    return fields
+end
+
+local function matchesSearch(fields, terms)
+    for _, term in ipairs(terms) do
+        if not fields:find(term, 1, true) then return false end
+    end
+    return true
+end
+
+function History.SearchPage(days, dayKeys, terms, first, limit, include, memo)
+    local matches, seen = {}, 0
+    for dayIndex = #dayKeys, 1, -1 do
+        local day = dayKeys[dayIndex]
+        local entries = days[day]
+        for index = #entries, 1, -1 do
+            local entry = entries[index]
+            if matchesSearch(searchFields(entry, memo), terms) and (not include or include(entry)) then
+                seen = seen + 1
+                if seen >= first then
+                    if #matches == limit then return matches, true end
+                    matches[#matches + 1] = { entry = entry, day = day }
+                end
+            end
+        end
+    end
+    return matches, false
+end
+
 local function classFromParty(party, name, classColors, unique)
     local short = firstName(name)
     if short == name and not unique then return end

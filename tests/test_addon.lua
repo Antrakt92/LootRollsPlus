@@ -13,7 +13,7 @@ local methods = {
     "SetColorTexture", "SetVerticalScroll", "SetChecked", "SetAlpha", "SetFontObject",
     "SetJustifyV", "SetMaxLines", "SetNormalFontObject", "SetHighlightFontObject",
     "SetResizable", "SetMinResize", "SetNormalTexture", "RegisterForClicks", "SetAutoFocus", "SetHitRectInsets",
-    "SetOrientation", "SetValueStep", "SetObeyStepOnDrag", "EnableMouseWheel",
+    "SetOrientation", "SetValueStep", "SetObeyStepOnDrag", "EnableMouseWheel", "SetMaxLetters",
 }
 for _, name in ipairs(methods) do widget[name] = noop end
 function widget:SetUserPlaced(placed) self.userPlaced = placed end
@@ -40,7 +40,13 @@ function widget:GetUnboundedStringWidthForText(text)
     local plain = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("|A.-|a", "XX")
     return #plain * (self.mockGlyphWidth or 6)
 end
-function widget:SetText(value) self.value = value end
+function widget:SetText(value)
+    if self.value == value then return end
+    self.value = value
+    if self.scripts and self.scripts.OnTextChanged then self.scripts.OnTextChanged(self, false) end
+end
+function widget:SetFocus() self.focused = true end
+function widget:ClearFocus() self.focused = false end
 function widget:SetOwner(owner) self.tooltipOwner = owner end
 function widget:SetHyperlink(link)
     if self.failNextHyperlink or self.failHyperlink then
@@ -75,12 +81,20 @@ function widget:AddMaskTexture(mask) self.mask = mask end
 function widget:SetTexCoord(...) self.coords = {...} end
 function widget:SetColorTexture(...) self.color = {...} end
 function widget:SetScript(event, fn) self.scripts[event] = fn end
+function widget:HookScript(event, fn)
+    local previous = self.scripts[event]
+    self.scripts[event] = function(self, ...)
+        if previous then previous(self, ...) end
+        fn(self, ...)
+    end
+end
 function widget:GetScript(event) return self.scripts[event] end
 function widget:RegisterEvent(event) self.events[event] = true end
 function widget:UnregisterEvent(event) self.events[event] = nil end
 function widget:SetScrollChild(child) self.scrollChild = child end
 function widget:SetVerticalScroll(offset) self.verticalScroll = offset end
 function widget:GetVerticalScroll() return self.verticalScroll or 0 end
+function widget:GetVerticalScrollRange() return math.max(0, self.scrollChild:GetHeight() - self:GetHeight()) end
 function widget:IsShown() return self.shown end
 function widget:GetText() return self.value end
 function widget:GetChecked() return self.checked end
@@ -1144,6 +1158,83 @@ selectDate(dateScroll, shortDate)
 assert(history:GetHeight() == shortHeight and itemScroll:GetWidth() == shortWidth)
 assert(not itemScroll.ScrollBar:IsShown() and itemScroll:GetVerticalScroll() == 0)
 assert(historyRow:GetWidth() == shortWidth, "reused history row did not regain the scrollbar gutter")
+
+do
+    local searchButton, box = LootRollsPlusHistorySearchButton, LootRollsPlusHistorySearchBox
+    local prev, nextPage = LootRollsPlusHistorySearchPrevious, LootRollsPlusHistorySearchNext
+    local function click(frame) frame:GetScript("OnClick")(frame) end
+    local function query(value)
+        box:SetText(value)
+        box:GetScript("OnEnterPressed")(box)
+    end
+    local function results()
+        local rows, count = {}, 0
+        for _, child in ipairs(itemScroll.scrollChild.children) do
+            if child.entry and child:IsShown() then
+                rows[child.entry] = true
+                count = count + 1
+            end
+        end
+        return rows, count
+    end
+
+    local archived, recent = LootRollsPlusCharDB.days[longDate], LootRollsPlusCharDB.days[shortDate]
+    local archiveSize = #archived
+    local own = historyEntry(longTimestamp + 30)
+    own.allpassed, own.winner, own.sourceName = nil, "Self", "Needlecase"
+    archived[#archived + 1] = own
+    for i = 1, 65 do
+        local entry = historyEntry(longTimestamp + 30 + i)
+        entry.sourceName = "Needlecase"
+        archived[#archived + 1] = entry
+    end
+    local current = historyEntry(shortTimestamp + 1)
+    current.sourceName = "Needlecase"
+    recent[#recent + 1] = current
+
+    selectDate(dateScroll, longDate)
+    itemScroll:SetVerticalScroll(30)
+    click(searchButton)
+    assert(box:IsVisible() and box.focused and dateScroll:IsShown())
+    query(" NEEDLECASE  ")
+    local rows, count = results()
+    assert(rows[current] and count == 60 and not dateScroll:IsShown(), "search must span dates with a bounded first page")
+    assert(not prev:IsShown() and nextPage:IsShown() and itemScroll:GetVerticalScroll() == 0)
+    click(nextPage)
+    rows, count = results()
+    assert(rows[own] and not rows[current] and count == 7 and prev:IsShown() and not nextPage:IsShown(),
+        "older matches must remain accessible through pagination")
+    click(prev)
+    assert(results()[current], "Previous should return to the newest results")
+    query("missing %")
+    _, count = results()
+    assert(count == 0 and not prev:IsShown() and not nextPage:IsShown())
+    contains(visibleText(itemScroll.scrollChild), "No matching rolls")
+    local filter = LootRollsPlusMyWins
+    click(filter)
+    query("needlecase")
+    rows, count = results()
+    assert(rows[own] and count == 1, "search must compose with My wins across dates")
+    click(filter)
+    query("")
+    assert(dateScroll:IsShown() and not results()[current])
+    itemScroll:SetVerticalScroll(32)
+    query("needlecase")
+    query("")
+    assert(itemScroll:GetVerticalScroll() == 32, "clearing search must restore the selected day's scroll")
+    itemScroll:SetVerticalScroll(35)
+    box:GetScript("OnEscapePressed")(box)
+    assert(not box:IsShown() and not box.focused and itemScroll:GetVerticalScroll() == 35)
+    click(searchButton)
+    query("needlecase")
+    SlashCmdList.LOOTROLLSPLUS("history")
+    assert(not box:IsShown() and not box.focused and not box:GetText():find("needlecase"))
+    openHistory()
+    assert(dateScroll:IsShown() and itemScroll:GetVerticalScroll() == 35 and not results()[current])
+    table.remove(recent)
+    for i = #archived, archiveSize + 1, -1 do archived[i] = nil end
+    selectDate(dateScroll, shortDate)
+end
 
 do
     local entries = LootRollsPlusCharDB.days[shortDate]

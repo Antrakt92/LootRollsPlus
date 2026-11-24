@@ -12,7 +12,7 @@ local MIN_WINDOW_HEIGHT, MAX_WINDOW_HEIGHT = 153, WINDOW_PADDING + MAX_VISIBLE *
 local db    -- LootRollsPlusDB: ajustes de la cuenta (posicion, opciones)
 local days  -- LootRollsPlusCharDB.days: historial de este personaje
 local charDB, visits, capture
-local refresh, queueRefresh, toggleDetails, UpdateVisibility
+local refresh, queueRefresh, toggleDetails, UpdateVisibility, HideAttachedDetails
 local RenderLiveRolls, PlaceComparison
 local hoverRow
 local worldReady
@@ -221,7 +221,7 @@ local function RequestItemData(link)
                 if pendingItems[link] == request or (comparisonNeedsItem and comparisonNeedsItem(link, request)) then
                     request.loaded = true
                     -- Keep the marker through redraw when instant metadata is still incomplete.
-                    queueRefresh(nil, true)
+                    queueRefresh(nil, true, true)
                 end
             end)
             if not ok then
@@ -232,7 +232,7 @@ local function RequestItemData(link)
                     ClearItemRequest(link)
                     if liveItemRequestStarved
                         or comparisonNeedsItem and (comparisonNeedsItem(link, request) or comparisonNeedsItem()) then
-                        queueRefresh()
+                        queueRefresh(nil, nil, true)
                     end
                 end)
             end
@@ -698,7 +698,8 @@ main:SetScript("OnSizeChanged", function(_, _, height)
     DrawMain()
 end)
 
-local HISTORY_TOP, HISTORY_BOTTOM = 22, 18
+local HISTORY_TOP, HISTORY_BOTTOM, HISTORY_SEARCH_HEIGHT = 22, 18, 23
+local SEARCH_PAGE_SIZE = 60
 local hist = CreateFrame("Frame", "LootRollsPlusHistory", main)
 main.history = hist
 hist:SetPoint("TOPLEFT")
@@ -744,21 +745,26 @@ historyEmpty:SetPoint("TOPLEFT", 3, -3)
 historyEmpty:SetText(L.noRolls)
 
 local function LayoutHistory()
-    local viewport = math.max(1, hist:GetHeight() - HISTORY_TOP - HISTORY_BOTTOM)
-    local datesOverflow = math.floor(dayContent:GetHeight() - viewport) > 0
+    local top = HISTORY_TOP + (hist.searchBox:IsShown() and HISTORY_SEARCH_HEIGHT or 0)
+    local bottom = hist.searchPageText:IsShown() and HISTORY_BOTTOM + 3 or HISTORY_BOTTOM
+    local viewport = math.max(1, hist:GetHeight() - top - bottom)
+    local showDates = not hist.searchTerms and #dayKeys > 0
+    local datesOverflow = showDates and math.floor(dayContent:GetHeight() - viewport) > 0
     local itemOverflow = math.floor(content:GetHeight() - viewport) > 0
-    local dateWidth = #dayKeys > 0 and dayContent:GetWidth() or 0
+    local dateWidth = showDates and dayContent:GetWidth() or 0
     local itemsLeft = 8 + dateWidth + (datesOverflow and SCROLL_GUTTER or 0) + (dateWidth > 0 and 4 or 0)
     local itemWidth = hist:GetWidth() - itemsLeft - 10 - (itemOverflow and SCROLL_GUTTER or 0)
     dayScroll:SetSize(math.max(1, dateWidth), viewport)
-    dayScroll:SetShown(dateWidth > 0)
+    dayScroll:ClearAllPoints()
+    dayScroll:SetPoint("TOPLEFT", 8, -top)
+    dayScroll:SetShown(showDates)
     scroll:ClearAllPoints()
-    scroll:SetPoint("TOPLEFT", itemsLeft, -HISTORY_TOP)
+    scroll:SetPoint("TOPLEFT", itemsLeft, -top)
     scroll:SetSize(itemWidth, viewport)
     content:SetWidth(itemWidth)
     if dayScroll.ScrollBar then dayScroll.ScrollBar:SetShown(datesOverflow) end
     if scroll.ScrollBar then scroll.ScrollBar:SetShown(itemOverflow) end
-    if not datesOverflow then dayScroll:SetVerticalScroll(0) end
+    if showDates and not datesOverflow then dayScroll:SetVerticalScroll(0) end
     if not itemOverflow then scroll:SetVerticalScroll(0) end
     for _, header in ipairs(visitHeaders) do
         if header:IsShown() then header:SetWidth(itemWidth - 4) end
@@ -840,33 +846,58 @@ local function EnsureSelected()
     end
 end
 
-local function BuildEntries()
-    local entries = selectedDay and days[selectedDay]
+local function BuildEntries(presentationOnly)
     local groups, byVisit = {}, {}
-    local fullName, firstName, playerClass
+    local include
     if hist.myWins.active then
-        fullName, firstName = ns.GetLootPlayerNames("player")
-        local _, class = UnitClass("player")
-        playerClass = class
+        local fullName, firstName = ns.GetLootPlayerNames("player")
+        local _, playerClass = UnitClass("player")
+        include = function(entry) return ns.History.IsPlayerWin(entry, fullName, firstName, playerClass) end
     end
-    for i = entries and #entries or 0, 1, -1 do
-        local e = entries[i]
-        if not hist.myWins.active or ns.History.IsPlayerWin(e, fullName, firstName, playerClass) then
-            local key = e.visit and e.visit.id or (e.legacy and "legacy" or "outside")
-            local group = byVisit[key]
-            if not group then
-                group = { visit = e.visit, imported = e.legacy, entries = {} }
-                byVisit[key] = group
-                groups[#groups + 1] = group
+    local function addEntry(entry, day)
+        local key = entry.visit and entry.visit.id or (entry.legacy and "legacy" or "outside")
+        if day then key = day .. ":" .. key end
+        local group = byVisit[key]
+        if not group then
+            group = { visit = entry.visit, imported = entry.legacy, entries = {}, day = day }
+            byVisit[key] = group
+            groups[#groups + 1] = group
+        end
+        group.entries[#group.entries + 1] = entry
+    end
+
+    local page, more = hist.searchPage, false
+    if hist.searchTerms then
+        local first = (page - 1) * SEARCH_PAGE_SIZE + 1
+        local results = presentationOnly and hist.searchResults
+        if results then
+            more = hist.searchMore
+        else
+            results, more = ns.History.SearchPage(days, dayKeys, hist.searchTerms, first, SEARCH_PAGE_SIZE, include, hist.searchMemo)
+            if #results == 0 and page > 1 then
+                hist.searchPage, page = 1, 1
+                scroll:SetVerticalScroll(0)
+                results, more = ns.History.SearchPage(days, dayKeys, hist.searchTerms, 1, SEARCH_PAGE_SIZE, include, hist.searchMemo)
             end
-            group.entries[#group.entries + 1] = e
+            hist.searchResults, hist.searchMore = results, more
+        end
+        for _, result in ipairs(results) do addEntry(result.entry, result.day) end
+    else
+        local entries = selectedDay and days[selectedDay]
+        for i = entries and #entries or 0, 1, -1 do
+            local entry = entries[i]
+            if not include or include(entry) then addEntry(entry) end
         end
     end
+    hist.searchPrev:SetShown(page > 1)
+    hist.searchNext:SetShown(more)
+    hist.searchPageText:SetShown(page > 1 or more)
+    hist.searchPageText:SetText(Label("Page %d", "Страница %d"):format(page))
 
     local rowIndex, headerIndex, offset = 0, 0, 0
     for groupIndex, group in ipairs(groups) do
         if groupIndex > 1 then offset = offset + 4 end
-        if group.visit or not group.imported then
+        if group.day or group.visit or not group.imported then
             headerIndex = headerIndex + 1
             local header = visitHeaders[headerIndex]
             if not header then
@@ -878,8 +909,10 @@ local function BuildEntries()
             end
             header:ClearAllPoints()
             header:SetPoint("TOPLEFT", 3, -offset)
-            header:SetText(group.visit and (MarkupText(group.visit.name) .. " · " .. date("%H:%M", group.visit.startedAt))
-                or OUTSIDE)
+            local prefix = group.day and DayLabel(group.day) or nil
+            local context = group.visit and (MarkupText(group.visit.name) .. " · " .. date("%H:%M", group.visit.startedAt))
+                or not group.imported and OUTSIDE or nil
+            header:SetText(prefix and context and (prefix .. " · " .. context) or prefix or context)
             header:Show()
             offset = offset + ROW_H + 4
         end
@@ -892,6 +925,10 @@ local function BuildEntries()
             end
             row:ClearAllPoints()
             row:SetPoint("TOPLEFT", 0, -offset)
+            if row == hoverRow and row.entry ~= e then
+                ReleaseTooltip(row)
+                hoverRow = nil
+            end
             FillRow(row, e)
             local item = "|cff9a9a9a" .. date("%H:%M", e.t) .. "|r " .. e.link
             local source = ItemLine(e)
@@ -905,7 +942,9 @@ local function BuildEntries()
         histRows[index]:Hide()
     end
     for index = headerIndex + 1, #visitHeaders do visitHeaders[index]:Hide() end
-    historyEmpty:SetText(hist.myWins.active and Label("No wins on this date", "В этот день выигрышей нет") or L.noRolls)
+    local empty = hist.searchTerms and Label("No matching rolls", "Ничего не найдено")
+        or hist.myWins.active and Label("No wins on this date", "В этот день выигрышей нет") or L.noRolls
+    historyEmpty:SetText(empty)
     historyEmpty:SetShown(rowIndex == 0)
     content:SetHeight(math.max(offset, ROW_H))
 end
@@ -915,10 +954,118 @@ hist.myWins:SetPoint("RIGHT", optBtn, "LEFT", -4, 0)
 hist.myWins:SetScript("OnClick", function(self)
     self.active = not self.active
     PaintButton(self)
+    hist.searchPage = 1
+    hist.searchDateOffset = nil
+    HideAttachedDetails(hist)
     scroll:SetVerticalScroll(0)
     BuildEntries()
     FitHistory()
 end)
+
+hist.searchPage = 1
+hist.searchPrev = TextButton(PREVIOUS or Label("Previous", "Назад"), hist, "LootRollsPlusHistorySearchPrevious")
+hist.searchPrev:SetPoint("BOTTOMLEFT", 8, 3)
+hist.searchNext = TextButton(NEXT or Label("Next", "Далее"), hist, "LootRollsPlusHistorySearchNext")
+hist.searchNext:SetPoint("BOTTOMRIGHT", -25, 3)
+hist.searchPageText = hist:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+hist.searchPageText:SetPoint("BOTTOM", 0, 5)
+hist.searchPrev:Hide()
+hist.searchNext:Hide()
+hist.searchPageText:Hide()
+
+do
+    local button = TextButton(SEARCH or Label("Search", "Поиск"), hist, "LootRollsPlusHistorySearchButton")
+    button:SetPoint("RIGHT", hist.myWins, "LEFT", -4, 0)
+    local box = CreateFrame("EditBox", "LootRollsPlusHistorySearchBox", hist, "SearchBoxTemplate")
+    hist.searchBox = box
+    box:SetPoint("TOPLEFT", 12, -HISTORY_TOP)
+    box:SetPoint("TOPRIGHT", -10, -HISTORY_TOP)
+    box:SetHeight(20)
+    box:SetAutoFocus(false)
+    box:SetMaxLetters(96)
+    box:Hide()
+
+    local revision = 0
+    local function changePage(page)
+        hist.searchPage = page
+        HideAttachedDetails(hist)
+        BuildEntries()
+        FitHistory()
+        scroll:SetVerticalScroll(0)
+    end
+    hist.searchPrev:SetScript("OnClick", function() changePage(hist.searchPage - 1) end)
+    hist.searchNext:SetScript("OnClick", function() changePage(hist.searchPage + 1) end)
+
+    local function applySearch()
+        local terms = box:IsShown() and ns.History.SearchTerms(box:GetText())
+        if not terms and not hist.searchTerms then
+            FitHistory()
+            return
+        end
+        if terms and not hist.searchTerms then
+            hist.searchDateOffset = scroll:GetVerticalScroll()
+            hist.searchDate = selectedDay
+        end
+        hist.searchTerms = terms or nil
+        changePage(1)
+        if not terms then
+            if selectedDay == hist.searchDate and hist.searchDateOffset then
+                scroll:SetVerticalScroll(math.min(hist.searchDateOffset, scroll:GetVerticalScrollRange()))
+            end
+            hist.searchDateOffset, hist.searchDate = nil, nil
+            hist.searchResults, hist.searchMore = nil, nil
+        end
+    end
+
+    local function closeSearch()
+        revision = revision + 1
+        button.active = nil
+        PaintButton(button)
+        box:ClearFocus()
+        box:Hide()
+        box:SetText("")
+    end
+    hist.closeSearch = function()
+        closeSearch()
+        hist.searchTerms, hist.searchPage = nil, 1
+        hist.searchMemo, hist.searchResults, hist.searchMore = nil, nil, nil
+        hist.searchPrev:Hide()
+        hist.searchNext:Hide()
+        hist.searchPageText:Hide()
+    end
+    button:SetScript("OnClick", function()
+        if box:IsShown() then
+            closeSearch()
+            applySearch()
+            hist.searchMemo = nil
+        else
+            button.active = true
+            PaintButton(button)
+            hist.searchMemo = setmetatable({}, { __mode = "k" })
+            box:Show()
+            FitHistory()
+            box:SetFocus()
+        end
+    end)
+    box:HookScript("OnTextChanged", function()
+        if not box:IsShown() or not hist:IsShown() then return end
+        revision = revision + 1
+        local requested = revision
+        C_Timer.After(0.12, function()
+            if revision == requested and box:IsVisible() then applySearch() end
+        end)
+    end)
+    box:SetScript("OnEnterPressed", function()
+        revision = revision + 1
+        applySearch()
+        box:ClearFocus()
+    end)
+    box:SetScript("OnEscapePressed", function()
+        closeSearch()
+        applySearch()
+        hist.searchMemo = nil
+    end)
+end
 
 local function SelectDay(key)
     selectedDay = key
@@ -985,6 +1132,10 @@ histBtn:SetScript("OnClick", function()
         BuildDayList()
         BuildEntries()
         FitHistory()
+        if selectedDay == hist.searchDate and hist.searchDateOffset then
+            scroll:SetVerticalScroll(math.min(hist.searchDateOffset, scroll:GetVerticalScrollRange()))
+        end
+        hist.searchDateOffset, hist.searchDate = nil, nil
     end
 end)
 
@@ -1507,7 +1658,7 @@ local function DrawComparison()
 end
 
 GameTooltip:HookScript("OnHide", function()
-    if type(detailPriceRetry) == "table" and detailPriceRetry.loaded then queueRefresh() end
+    if type(detailPriceRetry) == "table" and detailPriceRetry.loaded then queueRefresh(nil, nil, true) end
 end)
 
 equippedTooltip:SetScript("OnMouseUp", function(self, button)
@@ -1686,7 +1837,7 @@ details:SetScript("OnEvent", function(self, _, button)
     self:Hide()
 end)
 
-local function HideAttachedDetails(anchor)
+HideAttachedDetails = function(anchor)
     if detailAnchor == anchor then details:Hide() end
 end
 main:SetScript("OnHide", function(self)
@@ -1706,6 +1857,7 @@ hist:SetScript("OnHide", function(self)
     self:UnregisterEvent("GLOBAL_MOUSE_DOWN")
     StopHistorySizing()
     HideAttachedDetails(self)
+    self.closeSearch()
     histBtn.active = nil
     PaintButton(histBtn)
     main:SetResizeBounds(MAIN_WIDTH, MIN_WINDOW_HEIGHT, MAIN_WIDTH, WindowHeightLimit())
@@ -1718,7 +1870,7 @@ hist:SetScript("OnEvent", function(self)
     DismissOutside(self, function(focus) return detailAnchor == self and focus == details end)
 end)
 
-refresh = function(key)
+refresh = function(key, presentationOnly)
     -- Give a pinned tooltip first use of a freed request slot before redrawing the history rows.
     if comparisonNeedsItem() then
         if inspectionAttempt and inspectionAttempt.waitingForCapacity then
@@ -1738,11 +1890,11 @@ refresh = function(key)
     if hist:IsShown() then
         local changedDay = EnsureSelected()
         if key and not changedDay then
-            if key == selectedDay then BuildEntries() end
+            if hist.searchTerms or key == selectedDay then BuildEntries() end
             UpdateDayCount(key)
         else
             BuildDayList()
-            BuildEntries()
+            BuildEntries(presentationOnly and not changedDay)
         end
         FitHistory()
     end
@@ -1763,18 +1915,19 @@ refresh = function(key)
     end
 end
 
-local refreshQueued, dirtyDay, dirtyLive
-queueRefresh = function(key, withLive)
+local refreshQueued, dirtyDay, dirtyLive, dirtyHistory
+queueRefresh = function(key, withLive, presentationOnly)
     dirtyLive = dirtyLive or withLive
+    dirtyHistory = dirtyHistory or not presentationOnly
     if refreshQueued then
         if dirtyDay ~= key then dirtyDay = nil end
         return
     end
     dirtyDay, refreshQueued = key, true
     C_Timer.After(0, function()
-        local day, live = dirtyDay, dirtyLive
-        dirtyDay, dirtyLive, refreshQueued = nil, nil, false
-        refresh(day)
+        local day, live, historyChanged = dirtyDay, dirtyLive, dirtyHistory
+        dirtyDay, dirtyLive, dirtyHistory, refreshQueued = nil, nil, nil, false
+        refresh(day, not historyChanged)
         if live and RenderLiveRolls then RenderLiveRolls() end
     end)
 end

@@ -11,6 +11,42 @@ local function dateKey(timestamp)
     return day
 end
 
+do
+    local oldDay = "2026-11-13"
+    local visit = {id = 1, name = "Алый Монастырь"}
+    local localized = {
+        link = "|cffa335ee|Hitem:998::::::::|h[Épée % (赤龍)]|h|r",
+        winner = "Ёж-Тест",
+        visit = visit,
+        sourceName = "Mograine",
+    }
+    local newest = {link = link, winner = "Newest"}
+    local oldest = {link = link, winner = secret}
+    local days = {[oldDay] = {oldest, localized}, [day] = {newest}}
+    local keys = {oldDay, day}
+    local memo = setmetatable({}, {__mode = "k"})
+    local function search(query, first, limit, include)
+        return History.SearchPage(days, keys, assert(History.SearchTerms(query)), first or 1, limit or 60, include, memo)
+    end
+    assert(not History.SearchTerms("  \t\n") and not History.SearchTerms(secret))
+    local results, more = search("éPÉE % 赤龍 ёЖ монастырь MOGRAINE")
+    assert(not more and #results == 1 and results[1].entry == localized and results[1].day == oldDay)
+    assert(#search("a335ee") == 0 and #search("item:998") == 0 and #search("secret") == 0)
+    assert(#search("small pouch", 1, 60, function(entry) return entry == oldest end) == 1)
+    results, more = search("POUCH", 1, 1)
+    assert(more and #results == 1 and results[1].entry == newest and results[1].day == day)
+    results, more = search("pouch", 2, 1)
+    assert(not more and #results == 1 and results[1].entry == oldest and results[1].day == oldDay)
+    localized.winner = "Updated"
+    assert(#search("ёж") == 0 and search("updated")[1].entry == localized)
+    localized.sourceName = "Renault"
+    localized.visit.name = "Стратхольм"
+    assert(#search("mograine") == 0 and #search("монастырь") == 0)
+    assert(search("renault СТРАТ")[1].entry == localized)
+    localized.link = link
+    assert(#search("épée") == 0 and search("pouch updated")[1].entry == localized)
+end
+
 local live = {link = link, t = 20, rolls = {}, done = false}
 local charDB = {days = {[day] = {live}}}
 assert(not History.Import(charDB, dateKey))
