@@ -20,7 +20,7 @@ local comparisonNeedsItem, liveItemRequestStarved
 local activeEntries = {}
 local nextActiveOrder = 0
 local isSecret = issecretvalue or function() return false end
-local pendingItems = {}
+local pendingItems = { active = 0, count = 0 }
 local MAIN_WIDTH, HISTORY_WIDTH = 305, 430
 local STATUS_WIDTH = 137
 local ALERT_MASK = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
@@ -28,7 +28,6 @@ local ALERT_SIZE, ALERT_GAP = 8, 3
 local ALERT_STATUS_GAP = 5
 local ALERT_COLORS = display.WarningColors
 local MAX_PENDING_ITEMS = 100
-local pendingItemCount = 0
 local Label = display.Label
 local UNKNOWN = Label("Result unavailable", "Результат неизвестен")
 local OUTSIDE = Label("No dungeon recorded", "Подземелье не записано")
@@ -202,25 +201,29 @@ end
 local NewFrame = display.NewPanel
 
 local function ClearItemRequest(link)
-    if pendingItems[link] then
-        pendingItems[link] = nil
-        pendingItemCount = pendingItemCount - 1
-    end
+    local request = pendingItems[link]
+    if not request then return end
+    pendingItems[link] = nil
+    pendingItems.count = pendingItems.count - 1
+    if not request.loaded then pendingItems.active = pendingItems.active - 1 end
 end
 
 local function RequestItemData(link)
     if pendingItems[link] then return pendingItems[link] end
-    if pendingItemCount >= MAX_PENDING_ITEMS then return nil, true end
+    if pendingItems.active >= MAX_PENDING_ITEMS or pendingItems.count >= 2 * MAX_PENDING_ITEMS then return nil, true end
     if Item and type(Item.CreateFromItemLink) == "function" then
         local created, item = pcall(Item.CreateFromItemLink, Item, link)
         if created and not isSecret(item) and type(item) == "table" and type(item.ContinueOnItemLoad) == "function" then
             local request = {}
             pendingItems[link] = request
-            pendingItemCount = pendingItemCount + 1
+            pendingItems.active = pendingItems.active + 1
+            pendingItems.count = pendingItems.count + 1
             local ok = pcall(item.ContinueOnItemLoad, item, function()
-                if pendingItems[link] == request or (comparisonNeedsItem and comparisonNeedsItem(link, request)) then
+                local current = pendingItems[link] == request
+                if current or (comparisonNeedsItem and comparisonNeedsItem(link, request)) then
+                    if current and not request.loaded then pendingItems.active = pendingItems.active - 1 end
                     request.loaded = true
-                    -- Keep the marker through redraw when instant metadata is still incomplete.
+                    -- Deduplicate until the existing timeout even when instant metadata remains incomplete.
                     queueRefresh(nil, true, true)
                 end
             end)

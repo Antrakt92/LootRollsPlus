@@ -2309,8 +2309,8 @@ do
             "fill a partial snapshot only while the previously known equipment still agrees")
     end
 end
-for _, scenario in ipairs({"cold", "cold-price", "cached-price", "warm"}) do
-    local warmTooltip = scenario == "warm"
+for _, scenario in ipairs({"cold", "cold-price", "cached-price", "warm", "warm-fast"}) do
+    local warmTooltip = scenario == "warm" or scenario == "warm-fast"
     local priceUnlisted = scenario == "cold-price" or scenario == "cached-price"
     local when = wallTime
     local entries = {}
@@ -2362,6 +2362,23 @@ for _, scenario in ipairs({"cold", "cold-price", "cached-price", "warm"}) do
     if warmTooltip then assert(card.tooltipLink == pinned) end
     contains((warmTooltip and gear or card).value, "Loading item")
     assert(not callbacks[pinned], "a comparison must respect the item request cap")
+    if scenario == "warm-fast" then
+        (function()
+            local liveCold = "|cnIQ2:|Hitem:30002::::::::|h[Cold live item]|h|r"
+            local complete = callbacks[entries[1].link]
+            complete()
+            complete()
+            flushTimers()
+            flushTimers()
+            assert(callbacks[pinned], "a completed load must free capacity before its timeout")
+            assert(not callbacks[liveCold], "duplicate item callback must not free capacity twice")
+            assert(callbacks[entries[1].link] == complete, "keep the completed marker when metadata still cannot be read")
+            callbacks[entries[2].link]()
+            flushTimers()
+            flushTimers()
+            assert(callbacks[liveCold], "a second completed load must free capacity for the live panel")
+        end)()
+    end
     if scenario == "cached-price" then card.failHyperlink = nil end
     timerNow = timerNow + 15
     flushTimers()
