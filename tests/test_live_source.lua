@@ -765,4 +765,191 @@ assert(expect(source, 912).generation == sameGeneration and expect(source, 912).
     and expect(source, 912).winner.name == "Mage",
     "restoring the same item preserves its prior binding and accepts its terminal result")
 
+for _, scenario in ipairs({
+    { priorSlot = 1, survivorSlot = 2 },
+    { priorSlot = 2, survivorSlot = 1, delayed = true },
+    { priorSlot = 1, survivorSlot = 2, twinSlot = 3 },
+    { priorSlot = 1, survivorSlot = 2, queuedTwin = true },
+}) do
+    reset()
+    popup(920, scenario.priorSlot, link)
+    drops[77] = {drop(41, clock, link, {offspec}, offspec)}
+    source = newSource()
+    advance(3)
+    local nextStart = clock
+    popup(921, scenario.survivorSlot, link)
+    local confirmedTwin = scenario.twinSlot or scenario.queuedTwin
+    if confirmedTwin then popup(922, scenario.twinSlot, equivalent) end
+    rolls[920] = {link = link, finish = nextStart + 60}
+    drops[77][2] = drop(42, nextStart, link, {offspec})
+    emit("START_LOOT_ROLL", 920, 60000)
+    emit("START_LOOT_ROLL", 921, 60000)
+    -- Let Refresh discover the third copy from its frame or the native queue.
+    advance()
+    assert(expect(source, 920).ambiguous and expect(source, 921).ambiguous
+        and #expect(source, 920).rolls == 0 and #expect(source, 921).rolls == 0,
+        "a provisional overlap must hide both sets of votes until the item is resolved")
+
+    if scenario.delayed then advance(2.1) end
+    if confirmedTwin then
+        emit("CANCEL_LOOT_ROLL", 922)
+        rolls[922] = nil
+        if scenario.twinSlot then
+            GroupLootContainer.rollFrames[scenario.twinSlot] = nil
+        else
+            GroupLootContainer.waitingRolls[1] = nil
+        end
+    end
+    rolls[920].link = separate
+    drops[77][3] = drop(43, nextStart, separate, {need})
+    emit("LOOT_HISTORY_UPDATE_DROP", 77, 43)
+    advance()
+    local recovered = expect(source, 920)
+    assert(recovered.link == separate and not recovered.ambiguous
+        and #recovered.rolls == 1 and recovered.rolls[1].name == "Mage")
+    local survivor = expect(source, 921)
+    if confirmedTwin then
+        assert(survivor.ambiguous and #survivor.rolls == 0,
+            "an earlier provisional owner must not mask a confirmed overlap, even with a queued twin")
+    else
+        assert(not survivor.ambiguous and #survivor.rolls == 1 and survivor.rolls[1].name == "Paladin",
+            "an old provisional link must not permanently suppress the other live roll")
+    end
+end
+
+for _, scenario in ipairs({
+    { departing = 923 },
+    { departing = 923, cancel = true },
+    { departing = 923, cancel = true, masked = true },
+    { departing = 924, cancel = true, immediately = true },
+    { departing = 924, cancel = true, disabled = true },
+    { departing = 924, replacement = true },
+    { departing = 924, timedReplacement = true },
+}) do
+    reset()
+    popup(923, 1, link)
+    source = newSource()
+    advance(3)
+    local nextStart = clock
+    rolls[923] = {link = link, finish = nextStart + 60}
+    popup(924, 2, link)
+    drops[77] = {drop(44, nextStart, link, {need})}
+    emit("START_LOOT_ROLL", 923, 60000)
+    emit("START_LOOT_ROLL", 924, 60000)
+    if not scenario.immediately then
+        advance()
+        assert(expect(source, 924).ambiguous and #expect(source, 924).rolls == 0)
+    end
+    if scenario.masked then
+        rolls[923].link = secret
+        emit("START_LOOT_ROLL", 923, 60000)
+        advance()
+        assert(not lookup(source, 923) and #expect(source, 924).rolls == 0)
+    end
+    if scenario.disabled then source:SetEnabled(false) end
+    if scenario.timedReplacement then
+        advance(3)
+        local replacementStart = clock
+        rolls[scenario.departing] = {link = link, finish = replacementStart + 60}
+        emit("START_LOOT_ROLL", scenario.departing, 60000)
+        advance()
+        rolls[scenario.departing].link = separate
+        drops[77][2] = drop(45, replacementStart, separate, {offspec})
+        emit("LOOT_HISTORY_UPDATE_DROP", 77, 45)
+    elseif scenario.replacement then
+        rolls[scenario.departing] = {link = separate, finish = clock + 60}
+        emit("START_LOOT_ROLL", scenario.departing, 60000)
+    else
+        if scenario.cancel then emit("CANCEL_LOOT_ROLL", scenario.departing) end
+        rolls[scenario.departing], GroupLootContainer.rollFrames[scenario.departing - 922] = nil, nil
+    end
+    if scenario.disabled then source:SetEnabled(true) end
+    advance(scenario.cancel and 0.3 or 1.2)
+    local survivor = expect(source, scenario.departing == 923 and 924 or 923)
+    assert(survivor.ambiguous and #survivor.rolls == 0,
+        "unresolved overlap must not authorize the departed popup's candidate on the survivor")
+end
+
+for _, delayed in ipairs({false, true}) do
+    reset()
+    popup(930, 1, link)
+    source = newSource()
+    advance(3)
+    local nextStart = clock
+    rolls[930] = {link = link, finish = nextStart + 60}
+    popup(931, 2, link)
+    drops[77] = {drop(48, nextStart, link, {offspec})}
+    emit("START_LOOT_ROLL", 930, 60000)
+    emit("START_LOOT_ROLL", 931, 60000)
+    advance()
+    assert(expect(source, 930).ambiguous and expect(source, 931).ambiguous)
+    source:SetEnabled(false)
+    if delayed then advance(2.1) end
+    source:SetEnabled(true)
+    advance()
+    rolls[930].link = separate
+    drops[77][2] = drop(49, nextStart, separate, {need})
+    emit("LOOT_HISTORY_UPDATE_DROP", 77, 49)
+    advance()
+    local replacement = expect(source, 930)
+    assert(replacement.link == separate and not replacement.ambiguous and replacement.rolls[1].name == "Mage",
+        "re-enabling must retain enough evidence to recheck a pending native link")
+    assert(expect(source, 931).ambiguous and #expect(source, 931).rolls == 0,
+        "a toggle must not let an unresolved survivor claim a candidate")
+end
+
+for _, toggle in ipairs({false, true}) do
+    reset()
+    popup(925, 1, link)
+    drops[77] = {drop(51, clock, link, {need})}
+    source = newSource()
+    assert(#expect(source, 925).rolls == 1)
+    advance(3)
+    local nextStart = clock
+    rolls[925] = {link = secret, finish = nextStart + 60}
+    emit("START_LOOT_ROLL", 925, 60000)
+    advance()
+    assert(not lookup(source, 925))
+    if toggle then
+        source:SetEnabled(false)
+        source:SetEnabled(true)
+        advance()
+    end
+    rolls[925].link = link
+    advance()
+    rolls[925].link = separate
+    drops[77][2] = drop(52, nextStart, separate, {offspec})
+    emit("LOOT_HISTORY_UPDATE_DROP", 77, 52)
+    advance()
+    local replacement = expect(source, 925)
+    assert(replacement.link == separate and replacement.rolls[1].name == "Paladin",
+        "a fresh countdown with a masked START must still recheck its first readable link")
+end
+
+do
+    reset()
+    popup(930, 2, link)
+    source = newSource()
+    advance(3)
+    local nextStart = clock
+    rolls[930] = {link = link, finish = nextStart + 60}
+    emit("START_LOOT_ROLL", 930, 60000)
+    advance()
+    source:SetEnabled(false)
+    popup(931, 1, link)
+    drops[77] = {drop(48, clock, link, {offspec})}
+    emit("START_LOOT_ROLL", 931, 60000)
+    source:SetEnabled(true)
+    advance()
+    assert(expect(source, 930).ambiguous and expect(source, 931).ambiguous)
+    rolls[930].link = separate
+    drops[77][2] = drop(49, nextStart, separate, {need})
+    emit("LOOT_HISTORY_UPDATE_DROP", 77, 49)
+    advance()
+    assert(expect(source, 930).link == separate)
+    local firstFrame = expect(source, 931)
+    assert(not firstFrame.ambiguous and #firstFrame.rolls == 1 and firstFrame.rolls[1].name == "Paladin",
+        "a restored recheck hint must precede overlap classification, even if the other frame is observed first")
+end
+
 print("Live source timing, attribution, privacy, and lifecycle tests passed")

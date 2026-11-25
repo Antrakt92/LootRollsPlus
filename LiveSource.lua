@@ -270,6 +270,15 @@ local function rememberAmbiguous(observation, other)
     observation.ambiguous, other.ambiguous = true, true
 end
 
+local function preserveUnresolvedOverlap(observations, departing)
+    if not departing or not departing.provisionalOverlap then return end
+    for _, other in pairs(observations) do
+        if other ~= departing and other.provisionalOverlap and other.identity == departing.identity then
+            other.ambiguous = true
+        end
+    end
+end
+
 local function retireFinished(retired, id, observation, now)
     local prior = observation and observation.renderedFrom
     if prior and prior.finished and now then
@@ -325,6 +334,7 @@ function Source:Refresh(scanHistory)
     local recheckLinks = self.recheckLinks
     self.recheckLinks = nil
     local slots, ids, interests, owners, reportedCancelled = {}, {}, {}, {}, {}
+    local provisionalOverlaps = {}
     local missingIdentity = false
 
     local function observe(id, anchor, duration)
@@ -355,28 +365,38 @@ function Source:Refresh(scanHistory)
                 observation.identity, observation.linkUnconfirmed = identity, nil
             end
         end
+        if not observation.linkUnconfirmed then
+            updateObservationStart(observation, id, historyTime, duration)
+            local hint = self.disabledRollHints and self.disabledRollHints[id]
+            if hint and observation.identity == hint.identity
+                and (not observation.start or not hint.start
+                    or math.abs(observation.start - hint.start) <= START_TOLERANCE) then
+                observation.ambiguous = observation.ambiguous or hint.ambiguous
+                observation.recheckLinkUntil = observation.recheckLinkUntil or hint.recheckLinkUntil
+            end
+        end
+        if observation.identity then
+            local other = owners[observation.identity]
+            if other then
+                if observation.recheckLinkUntil or other.recheckLinkUntil then
+                    -- An old link can match until the replacement becomes readable.
+                    provisionalOverlaps[observation], provisionalOverlaps[other] = true, true
+                else
+                    rememberAmbiguous(observation, other)
+                end
+            end
+            if not other or (other.recheckLinkUntil and not observation.recheckLinkUntil) then
+                -- Prefer a confirmed owner so it can detect another confirmed copy.
+                owners[observation.identity] = observation
+            end
+        else
+            missingIdentity = true
+        end
         if observation.linkUnconfirmed then
             -- A masked START may refer to a replacement popup. Keep an old binding
             -- for a duplicate START, but only show it once the link is readable again.
             missingIdentity = true
             return
-        end
-        updateObservationStart(observation, id, historyTime, duration)
-        local ambiguous = self.disabledAmbiguity and self.disabledAmbiguity[id]
-        if ambiguous and observation.identity == ambiguous.identity
-            and (not observation.start or not ambiguous.start
-                or math.abs(observation.start - ambiguous.start) <= START_TOLERANCE) then
-            observation.ambiguous = true
-        end
-        if observation.identity then
-            local other = owners[observation.identity]
-            if other then
-                rememberAmbiguous(observation, other)
-            else
-                owners[observation.identity] = observation
-            end
-        else
-            missingIdentity = true
         end
         if anchor and observation.identity then
             local start = confirmedStart(observation)
@@ -417,6 +437,7 @@ function Source:Refresh(scanHistory)
                 if observation.seenAt and now - observation.seenAt < 1 and not self.cancelled[id] then
                     observe(id)
                 else
+                    preserveUnresolvedOverlap(self.observations, observation)
                     retireFinished(self.retired, id, observation, now)
                     self.observations[id] = nil
                 end
@@ -432,7 +453,10 @@ function Source:Refresh(scanHistory)
         if geometryChanged(observation, item.anchor) then layoutChanged = true end
         observation.lookupStart = start
     end
-    for _, observation in pairs(self.observations) do observation.visible = false end
+    for _, observation in pairs(self.observations) do
+        observation.visible = false
+        observation.provisionalOverlap = provisionalOverlaps[observation]
+    end
     if identityChanged then
         self.warmupUntil, self.warmupAt = now + HISTORY_RETRY_WINDOW, now + HISTORY_RETRY_INTERVAL
     end
@@ -471,10 +495,10 @@ function Source:Refresh(scanHistory)
         local observation = item.observation
         observation.visible = true
         local candidate
-        if not observation.ambiguous and not missingIdentity then
+        if not (observation.ambiguous or observation.provisionalOverlap or missingIdentity) then
             candidate = matchHistory(observation, self.history[observation.identity])
         end
-        local ambiguous = observation.ambiguous == true
+        local ambiguous = observation.ambiguous == true or observation.provisionalOverlap == true
         local row = observation.rendered
         if not row or row.anchor ~= item.anchor or row.link ~= observation.link
             or row.ambiguous ~= ambiguous or observation.renderedFrom ~= candidate then
@@ -531,13 +555,13 @@ function Source:OnEvent(event, first, second)
     if event == "PLAYER_LEAVING_WORLD" then
         self.frame:Hide()
         self.inWorld = false
-        self.disabledAmbiguity, self.disabledKnownRolls = nil, nil
+        self.disabledRollHints, self.disabledKnownRolls = nil, nil
         self:Reset()
         self:Publish({})
         return
     end
     if event == "PLAYER_ENTERING_WORLD" then
-        self.disabledAmbiguity, self.disabledKnownRolls = nil, nil
+        self.disabledRollHints, self.disabledKnownRolls = nil, nil
         self:Reset()
         self.inWorld = true
     end
@@ -547,7 +571,7 @@ function Source:OnEvent(event, first, second)
         local known = self.disabledKnownRolls
         -- Keep lifecycle events only. Gathering item and history data stays disabled.
         if event == "START_LOOT_ROLL" and id then
-            if self.cancelled[id] and self.disabledAmbiguity then self.disabledAmbiguity[id] = nil end
+            if self.cancelled[id] and self.disabledRollHints then self.disabledRollHints[id] = nil end
             self.cancelled[id], self.retired[id] = nil, nil
             self.disabledKnownRolls = known or {}
             self.disabledKnownRolls[id] = true
@@ -571,12 +595,16 @@ function Source:OnEvent(event, first, second)
             local observation = self.observations[id] or {}
             local previousIdentity = observation.identity
             if identity and previousIdentity and identity ~= previousIdentity then
+                if not observation.recheckLinkUntil then
+                    preserveUnresolvedOverlap(self.observations, observation)
+                end
                 observation = {}
             elseif confirmedStart(observation) then
                 local timing = {}
                 updateObservationStart(timing, id, historyTime, second)
                 -- A clean countdown can prove ID reuse before a cancel reaches us.
                 if timing.start and timing.start - observation.start > START_TOLERANCE then
+                    preserveUnresolvedOverlap(self.observations, observation)
                     if observation.historyKey then
                         timing.retiredHistory = { [observation.historyKey] = observation.historyStart }
                     end
@@ -589,8 +617,9 @@ function Source:OnEvent(event, first, second)
                 observation.link = observation.link or link
                 observation.identity, observation.linkUnconfirmed = identity, nil
             end
-            if observation.identity and (not identity or identity == previousIdentity) then
+            if previousIdentity and (not identity or identity == previousIdentity) then
                 -- START can arrive before the item API switches away from the previous link.
+                observation.identity = observation.identity or previousIdentity
                 observation.recheckLinkUntil = (observation.seenAt or 0) + LINK_RECHECK_WINDOW
                 observation.linkUnconfirmed = not identity or nil
             end
@@ -604,6 +633,8 @@ function Source:OnEvent(event, first, second)
                         if prior and prior.finished and active and active[id] and not active[otherID] then
                             retireFinished(self.retired, otherID, other, observation.seenAt)
                             self.observations[otherID], self.cancelled[otherID] = nil, true
+                        elseif observation.recheckLinkUntil or other.recheckLinkUntil then
+                            observation.provisionalOverlap, other.provisionalOverlap = true, true
                         else
                             rememberAmbiguous(observation, other)
                         end
@@ -630,7 +661,9 @@ function Source:OnEvent(event, first, second)
         local id = key(first)
         if id then
             self.cancelled[id] = true
-            retireFinished(self.retired, id, self.observations[id], number(read(_G.GetTime)))
+            local observation = self.observations[id]
+            preserveUnresolvedOverlap(self.observations, observation)
+            retireFinished(self.retired, id, observation, number(read(_G.GetTime)))
             self.observations[id] = nil
         end
     elseif event == "CANCEL_ALL_LOOT_ROLLS" then
@@ -693,7 +726,7 @@ function Source:Start(onChange, initiallyEnabled)
         if not active then
             -- Blizzard can continue reporting a cancelled popup during a later wake.
             self.cancelled, self.updates = reportedCancelled, {}
-            self.disabledAmbiguity = nil
+            self.disabledRollHints = nil
             frame:Hide()
         end
     end)
@@ -705,13 +738,19 @@ function Source:SetEnabled(enabled)
     if not self.frame or self.enabled == enabled then return end
     self.enabled = enabled
     if not enabled and self.observations then
-        local ambiguity = self.disabledAmbiguity or {}
+        local hints = self.disabledRollHints or {}
         local known = {}
         for id, observation in pairs(self.observations) do
             known[id] = true
-            if observation.ambiguous then ambiguity[id] = observation end
+            local ambiguous = observation.ambiguous or observation.provisionalOverlap
+            if observation.identity and (ambiguous or observation.recheckLinkUntil) then
+                hints[id] = {
+                    identity = observation.identity, start = observation.start,
+                    ambiguous = ambiguous, recheckLinkUntil = observation.recheckLinkUntil,
+                }
+            end
         end
-        self.disabledAmbiguity = next(ambiguity) and ambiguity or nil
+        self.disabledRollHints = next(hints) and hints or nil
         self.disabledKnownRolls = next(known) and known or nil
     end
     local cancelled, retired = self.cancelled, self.retired
