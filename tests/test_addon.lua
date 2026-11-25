@@ -2137,6 +2137,37 @@ do
     LootRollsPlusCharDB.days = {}
     C_LootHistory.GetSortedDropsForEncounter = function() return {} end
     loadAddon(true)
+    local self = {playerName = "Self", playerClass = "PALADIN", playerGUID = "Player-Test", state = 0, roll = 96}
+    local other = {playerName = "Other Mage", playerClass = "MAGE", playerGUID = "Player-Mage", state = 0, roll = 98}
+    wallTime, historyTime = wallTime + 1, historyTime + 1
+    drops[9905] = {lootListKey = 9905, itemHyperlink = cloth, startTime = historyTime, rollInfos = {self}, winner = self}
+    drops[9906] = {lootListKey = 9906, itemHyperlink = cloth, startTime = historyTime, rollInfos = {other}, winner = other}
+    local previousCombat = InCombatLockdown
+    function InCombatLockdown() return true end
+    inspectedUnit = nil
+    fire("LOOT_HISTORY_UPDATE_DROP", 20, 9905)
+    fire("LOOT_HISTORY_UPDATE_DROP", 20, 9906)
+    for _ = 1, 4 do timerNow = timerNow + 0.5; flushTimers() end
+    local mine, theirs
+    for _, row in ipairs(LootRollsPlusFrame.children) do
+        local entry = row.entry
+        if entry and entry.lootListKey == 9905 then mine = entry end
+        if entry and entry.lootListKey == 9906 then theirs = entry end
+    end
+    assert(mine and mine.inspections and mine.inspections.Self.links[1] == equipped,
+        "combat must not block reading the player's equipment behind a remote request")
+    assert(theirs and not theirs.inspections and not inspectedUnit, "combat must still block the remote inspection")
+    InCombatLockdown = previousCombat
+    timerNow = timerNow + 0.5
+    flushTimers()
+    assert(inspectedUnit == "party1", "the blocked winner remains queued")
+    fire("INSPECT_READY", "Player-Mage")
+    assert(theirs.inspections["Other Mage"].links[1] == memberItem)
+end
+do
+    LootRollsPlusCharDB.days = {}
+    C_LootHistory.GetSortedDropsForEncounter = function() return {} end
+    loadAddon(true)
     local key = 1006
     wallTime, historyTime = wallTime + 1, historyTime + 1
     local winner = {playerName = "Other Mage", playerClass = "MAGE", playerGUID = "Player-Mage", state = 0, roll = 98}

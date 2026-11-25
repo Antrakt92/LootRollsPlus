@@ -2254,7 +2254,8 @@ do
                         end
                     end, job.guid)
                     if status == "busy" or status == "combat" or status == "inspectOpen" then
-                        table.insert(jobs, 1, job)
+                        -- Local equipment reads can still run while remote inspection is blocked.
+                        jobs[#jobs + 1] = job
                     elseif status == "unavailable" or (status == "absent" and job.guid) then
                         RetryWinner()
                     end
