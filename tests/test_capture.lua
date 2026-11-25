@@ -683,6 +683,19 @@ do
     emitDrop(engine, 102)
     start(986, otherLink)
     assert(#row == 2, "an older native roll must not overwrite the reservation of the current item")
+
+    setDrops()
+    engine = new()
+    engine:Start()
+    start(987)
+    start(987, otherLink)
+    assert(#row == 2 and row[1].closed and row[2].link == otherLink,
+        "a readable replacement START must close the old item even before cancellation is reported")
+    chat("You won " .. link)
+    assert(row[1].done and not row[2].done, "the old result must stay separated from the active replacement")
+    chat("You need " .. otherLink)
+    chat("You won " .. otherLink)
+    assert(row[2].done and row[2].winnerType == "need")
 end
 
 setDrops()

@@ -599,11 +599,11 @@ function ns.NewCapture(callbacks)
         local duration = clean(rollTime, "number")
         if not rollID or not duration or duration <= 0 then return end
         local previous = chatByID[rollID]
-        if previous and not (previous.entry.done or previous.entry.closed) then return end
         local link, identity = itemLink(read(_G.GetLootRollItemLink, rollID))
         local covered = coveredRolls[rollID]
         if not link or (previous and previous.identity == identity) or (covered and covered.identity == identity) then return end
-        -- Keep the old item eligible for late chat without owning the recycled ID.
+        -- A different item owns the native ID. Keep the old item eligible for late chat.
+        if previous then closeChatSlot(previous) end
         chatByID[rollID], coveredRolls[rollID] = nil, nil
         local observedAt = time()
         local active = nativeActive[identity]
