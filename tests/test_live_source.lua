@@ -700,7 +700,7 @@ for _, event in ipairs({"CANCEL_LOOT_ROLL", "CANCEL_ALL_LOOT_ROLLS"}) do
     assert(expect(source, 910).rolls[1].name == "Paladin", "a new START can reuse the canceled ID")
 end
 
-for _, scenario in ipairs({"immediate", "staleLink", "delayed"}) do
+for _, scenario in ipairs({"immediate", "staleStart", "staleLink", "delayed"}) do
     reset()
     local originalFrame = popup(911, 1, link)
     drops[77] = {drop(35, clock, link, {need})}
@@ -708,7 +708,7 @@ for _, scenario in ipairs({"immediate", "staleLink", "delayed"}) do
     local prior = expect(source, 911)
     advance(0.8)
     local nextStart = clock
-    rolls[911] = {link = secret, finish = nextStart + 60}
+    rolls[911] = {link = scenario == "staleStart" and link or secret, finish = nextStart + 60}
     local itemLinkAPI, reads = GetLootRollItemLink, 0
     function GetLootRollItemLink(id)
         reads = reads + 1
@@ -716,8 +716,12 @@ for _, scenario in ipairs({"immediate", "staleLink", "delayed"}) do
     end
     emit("START_LOOT_ROLL", 911, 60000)
     advance()
-    assert(not lookup(source, 911), "a masked START must not publish the previous occurrence's votes")
-    if scenario ~= "immediate" then
+    if scenario == "staleStart" then
+        assert(expect(source, 911).generation == prior.generation)
+    else
+        assert(not lookup(source, 911), "a masked START must not publish the previous occurrence's votes")
+    end
+    if scenario == "staleLink" or scenario == "delayed" then
         rolls[911].link = link
         advance()
         assert(expect(source, 911).generation == prior.generation, "a readable original item can provisionally restore votes")
@@ -730,7 +734,7 @@ for _, scenario in ipairs({"immediate", "staleLink", "delayed"}) do
     end
     rolls[911].link = separate
     drops[77][2] = drop(36, nextStart, separate, {offspec})
-    if scenario == "delayed" then emit("LOOT_HISTORY_UPDATE_DROP", 77, 36) end
+    if scenario == "delayed" or scenario == "staleStart" then emit("LOOT_HISTORY_UPDATE_DROP", 77, 36) end
     advance()
     GetLootRollItemLink = itemLinkAPI
     local recovered = expect(source, 911)
@@ -744,15 +748,21 @@ local sameRoll = drop(37, clock, link, {need})
 drops[77] = {sameRoll}
 source = newSource()
 local sameGeneration = expect(source, 912).generation
+rolls[912].link = equivalent
+emit("START_LOOT_ROLL", 912, 60000)
+advance()
+assert(expect(source, 912).generation == sameGeneration and expect(source, 912).link == link,
+    "equivalent item markup must not invalidate the current UI")
 rolls[912].link = secret
 emit("START_LOOT_ROLL", 912, 60000)
 advance()
 assert(not lookup(source, 912), "a duplicate START with a masked item still needs revalidation")
-rolls[912].link = link
+rolls[912].link = equivalent
 sameRoll.winner = need
 emit("LOOT_HISTORY_UPDATE_DROP", 77, 37)
 advance()
-assert(expect(source, 912).generation == sameGeneration and expect(source, 912).winner.name == "Mage",
+assert(expect(source, 912).generation == sameGeneration and expect(source, 912).link == link
+    and expect(source, 912).winner.name == "Mage",
     "restoring the same item preserves its prior binding and accepts its terminal result")
 
 print("Live source timing, attribution, privacy, and lifecycle tests passed")

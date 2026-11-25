@@ -351,7 +351,8 @@ function Source:Refresh(scanHistory)
                 end
                 -- A readable old link can be the first response after a masked
                 -- replacement START. Restore it provisionally and keep checking.
-                observation.link, observation.identity, observation.linkUnconfirmed = link, identity, nil
+                observation.link = observation.link or link
+                observation.identity, observation.linkUnconfirmed = identity, nil
             end
         end
         if observation.linkUnconfirmed then
@@ -568,7 +569,8 @@ function Source:OnEvent(event, first, second)
             local identity = itemLink(link)
             local historyTime = number(read(api.GetLootHistoryTime))
             local observation = self.observations[id] or {}
-            if identity and observation.identity and identity ~= observation.identity then
+            local previousIdentity = observation.identity
+            if identity and previousIdentity and identity ~= previousIdentity then
                 observation = {}
             elseif confirmedStart(observation) then
                 local timing = {}
@@ -584,10 +586,13 @@ function Source:OnEvent(event, first, second)
             updateObservationStart(observation, id, historyTime, second, true)
             observation.seenAt = number(read(_G.GetTime))
             if identity then
-                observation.identity, observation.link, observation.linkUnconfirmed = identity, link, nil
-            elseif observation.identity then
+                observation.link = observation.link or link
+                observation.identity, observation.linkUnconfirmed = identity, nil
+            end
+            if observation.identity and (not identity or identity == previousIdentity) then
+                -- START can arrive before the item API switches away from the previous link.
                 observation.recheckLinkUntil = (observation.seenAt or 0) + LINK_RECHECK_WINDOW
-                observation.linkUnconfirmed = true
+                observation.linkUnconfirmed = not identity or nil
             end
             self.retired[id] = nil
             if identity then
