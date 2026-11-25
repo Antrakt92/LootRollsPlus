@@ -2246,9 +2246,10 @@ do
                         end
                     end
                     local status = inspector:Request(entry.link, name, class, function(result, snapshot, guid)
-                        if snapshot and SaveInspection(entry, name, class, job.guid, snapshot, guid, true)
-                            and detailEntry == entry then DrawComparison() end
-                        if result == "unavailable" or result == "timeout" or result == "noData" then
+                        local matches = snapshot and SaveInspection(entry, name, class, job.guid, snapshot, guid, true)
+                        if matches and detailEntry == entry then DrawComparison() end
+                        if result == "unavailable" or result == "timeout" or result == "noData"
+                            or (matches and not CompleteDropInspection(snapshot)) then
                             RetryWinner(result ~= "unavailable")
                         end
                     end, job.guid)

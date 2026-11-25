@@ -2315,14 +2315,20 @@ do
     C_LootHistory.GetSortedDropsForEncounter = function() return {} end
     function GetNumGroupMembers() return 2 end
     function InCombatLockdown() return false end
-    for _, changed in ipairs({false, true}) do
+    for _, scenario in ipairs({
+        { finalized = false, changed = false },
+        { finalized = false, changed = true },
+        { finalized = true, changed = false },
+        { finalized = true, changed = true },
+        { finalized = true, remainsPartial = true },
+    }) do
         LootRollsPlusCharDB.days = {}
         loadAddon(true)
         first, second = firstRing, nil
-        local key = changed and 2052 or 2051
+        local key = 2051
         local player = {playerName = "Other Mage", playerClass = "MAGE", playerGUID = "Player-Mage", state = 0}
         wallTime, historyTime = wallTime + 1, historyTime + 1
-        drops[key] = {lootListKey = key, itemHyperlink = ring, startTime = historyTime, rollInfos = {player}}
+        drops[key] = {lootListKey = key, itemHyperlink = ring, startTime = historyTime, rollInfos = {player}, winner = scenario.finalized and player or nil}
         fire("LOOT_HISTORY_UPDATE_DROP", 20, key)
         timerNow = timerNow + 0.5
         flushTimers()
@@ -2330,16 +2336,24 @@ do
         local entry = nextVisibleRow(LootRollsPlusFrame).entry
         local snapshot = assert(entry.inspections and entry.inspections["Other Mage"])
         assert(snapshot.atDrop and snapshot.links[1] == firstRing and not snapshot.links[2])
-        first, second = changed and replacementRing or firstRing, secondRing
-        player.roll, drops[key].winner = 96, player
+        first = scenario.changed and replacementRing or firstRing
+        second = not scenario.remainsPartial and secondRing or nil
         inspectedUnit = nil
-        fire("LOOT_HISTORY_UPDATE_DROP", 20, key)
+        if not scenario.finalized then
+            player.roll, drops[key].winner = 96, player
+            fire("LOOT_HISTORY_UPDATE_DROP", 20, key)
+        end
         for _ = 1, 5 do timerNow = timerNow + 0.5; flushTimers() end
         assert(inspectedUnit == "party1", "a winner with a partial snapshot should be inspected again")
         fire("INSPECT_READY", "Player-Mage")
         local saved = entry.inspections["Other Mage"]
-        assert(saved.links[1] == firstRing and saved.links[2] == (not changed and secondRing or nil),
+        assert(saved.links[1] == firstRing and saved.links[2] == (not scenario.changed and second or nil),
             "fill a partial snapshot only while the previously known equipment still agrees")
+        if scenario.finalized then
+            inspectedUnit = nil
+            for _ = 1, 5 do timerNow = timerNow + 0.5; flushTimers() end
+            assert(not inspectedUnit, "a partial winner snapshot gets at most one incomplete retry")
+        end
     end
 end
 for _, scenario in ipairs({"cold", "cold-price", "cached-price", "warm", "warm-fast"}) do
