@@ -1950,7 +1950,7 @@ local function SoloHidden()
 end
 
 UpdateVisibility = function()
-    main:SetShown(not db.hidden and (main.options:IsShown() or not SoloHidden()))
+    main:SetShown(main.options:IsShown() or hist:IsShown() or (not db.hidden and not SoloHidden()))
 end
 
 local liveDemo
@@ -2569,6 +2569,10 @@ SlashCmdList.LOOTROLLSPLUS = function(msg)
         main:SetPoint("CENTER", UIParent, "CENTER", 400, 0)
     else
         db.hidden = not db.hidden
+        if db.hidden then
+            main.options:Hide()
+            hist:Hide()
+        end
         UpdateVisibility()
         if not db.hidden and SoloHidden() then
             print("|cff80c0ffLoot Rolls Plus|r: " .. L.soloHidden)
