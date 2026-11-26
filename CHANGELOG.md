@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.1 — 26-Nov-2026 — Loot roll and inspection fixes
+
+- Keep votes with the right item when the game reuses a roll ID or briefly shows an old item link.
+- Keep History and Options open across group changes when you opened them while the roll window was hidden.
+- Retry incomplete two-slot equipment checks for winners. Let blocked inspections wait while other gear can be read.
+
 ## 1.4.0 — 24-Nov-2026 — History search and raid filters
 
 - Search all saved dates by item, winner, dungeon, or drop source. Paste an item link or combine the search with **My wins**.
